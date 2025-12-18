@@ -1,0 +1,15 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache
+**/.coverage
+**/htmlcov
+**/venv
+**/env
+**/.env
+**/node_modules
+**/.next
+**/dist
+**/build
+
