@@ -282,7 +282,7 @@ The Detection Agent identifies:
 - Unusual IP/action detection
 - Per-log anomaly scoring
 
-## 🧪 Testing the System
+## Testing the System
 
 ### Quick Health Check
 
@@ -322,15 +322,7 @@ pytest tests/test_system_health.py -v -m integration
 pytest tests/test_system_health.py --timeout=120 -v
 ```
 
-## 🎓 Documentation
-
-- **[PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)** - Complete feature overview
-- **[PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)** - Detailed architecture
-- **[CLOUD_LOG_PARSERS_EXPLAINED.md](CLOUD_LOG_PARSERS_EXPLAINED.md)** - Cloud log format parsers
-- **[docs/COMPREHENSIVE_TESTING_GUIDE.md](docs/COMPREHENSIVE_TESTING_GUIDE.md)** - Testing guide
-- **[TESTING_INSTRUCTIONS.md](TESTING_INSTRUCTIONS.md)** - Quick testing instructions
-
-## 🔒 Security Considerations
+## Security Considerations
 
 - API keys stored in environment variables
 - Input validation via Pydantic models
@@ -338,7 +330,7 @@ pytest tests/test_system_health.py --timeout=120 -v
 - CORS configured for specific origins
 - Error handling with secure error messages
 
-## 📝 Project Structure
+## Project Structure
 
 ```
 Autonomous-AI-SOC-Analyst-System/
@@ -367,16 +359,7 @@ Autonomous-AI-SOC-Analyst-System/
 └── README.md
 ```
 
-## 🚧 Future Enhancements
-
-- Authentication/Authorization
-- Advanced ML models (deep learning)
-- Real cloud API integrations (AWS/Azure/GCP API connectors)
-- Additional SIEM connectors
-- Real firewall/AD integration
-- Performance monitoring (Prometheus/Grafana)
-
-## 🤝 Contributing
+## Contributing
 
 Contributions welcome! Please:
 1. Fork the repository
@@ -384,26 +367,10 @@ Contributions welcome! Please:
 3. Make your changes
 4. Submit a pull request
 
-## 📄 License
-
-This project is for educational and portfolio purposes.
-
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Anthropic for Claude API
 - LangChain team for LangGraph
 - MITRE for ATT&CK framework
 - shadcn for UI components
 - Ollama for free local LLM
-
-## 📧 Contact
-
-For questions or feedback, please open an issue on [GitHub](https://github.com/celinejp/Autonomous-AI-SOC-Analyst-System).
-
----
-
-**Built with ❤️ to demonstrate modern AI engineering capabilities in cybersecurity.**
-
-**Status**: ✅ Production-ready with all features implemented!
-
-**GitHub**: https://github.com/celinejp/Autonomous-AI-SOC-Analyst-System
