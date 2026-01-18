@@ -4,10 +4,10 @@ from typing import Any, Dict, List
 from datetime import datetime
 import time
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 
 from app.core.config import settings
+from app.core.llm_factory import get_llm
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -16,15 +16,11 @@ logger = get_logger(__name__)
 class BaseAgent:
     """Base class for all SOC agents."""
 
-    def __init__(self, name: str, system_prompt: str, tools: List[Any] = None):
-        """Initialize agent with Claude model and tools."""
+    def __init__(self, name: str, system_prompt: str, tools: List[Any] = None, temperature: float = 0.1):
+        """Initialize agent with LLM model and tools."""
         self.name = name
         self.system_prompt = system_prompt
-        self.llm = ChatAnthropic(
-            model="claude-sonnet-4-20250514",
-            temperature=0.1,
-            anthropic_api_key=settings.anthropic_api_key,
-        )
+        self.llm = get_llm(temperature=temperature)
         self.tools = tools or []
         if self.tools:
             self.llm = self.llm.bind_tools(self.tools)

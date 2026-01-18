@@ -1,0 +1,31 @@
+{
+  "source": "network_logs",
+  "log_type": "network",
+  "description": "Data Exfiltration - Large outbound data transfers to external IP",
+  "logs": [
+    "2025-01-15 13:00:00 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:01 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:02 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:03 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:04 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:05 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:06 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:07 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:08 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:09 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:10 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:11 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:12 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:13 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443",
+    "2025-01-15 13:00:14 network OUTBOUND src=192.168.1.50 dst=203.0.113.100 bytes=10485760 protocol=TCP port=443"
+  ],
+  "expected_detection": {
+    "should_alert": true,
+    "min_severity": "high",
+    "mitre_techniques": ["T1041"],
+    "attack_type": "exfiltration",
+    "min_alerts": 1,
+    "reasoning": "Sustained large outbound transfers (150MB+ total) to external IP indicates potential data exfiltration"
+  }
+}
+

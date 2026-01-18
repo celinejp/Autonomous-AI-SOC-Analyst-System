@@ -1,0 +1,26 @@
+{
+  "source": "web_logs",
+  "log_type": "web_server",
+  "description": "Benign Traffic - Normal web access patterns (should NOT trigger alerts)",
+  "logs": [
+    "2025-01-15 14:00:00 webserver GET /index.html HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.200",
+    "2025-01-15 14:00:01 webserver GET /about.html HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.201",
+    "2025-01-15 14:00:02 webserver GET /contact.html HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.202",
+    "2025-01-15 14:00:03 webserver GET /products.html HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.203",
+    "2025-01-15 14:00:04 webserver POST /api/login HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.204",
+    "2025-01-15 14:00:05 webserver GET /api/user/profile HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.205",
+    "2025-01-15 14:00:06 webserver GET /images/logo.png HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.206",
+    "2025-01-15 14:00:07 webserver GET /css/style.css HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.207",
+    "2025-01-15 14:00:08 webserver GET /js/app.js HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.208",
+    "2025-01-15 14:00:09 webserver GET /api/products HTTP/1.1 200 - \"Mozilla/5.0\" src=192.168.1.209"
+  ],
+  "expected_detection": {
+    "should_alert": false,
+    "min_severity": "low",
+    "mitre_techniques": [],
+    "attack_type": "none",
+    "min_alerts": 0,
+    "reasoning": "Normal web traffic patterns with legitimate user agents and successful responses - should not trigger security alerts"
+  }
+}
+

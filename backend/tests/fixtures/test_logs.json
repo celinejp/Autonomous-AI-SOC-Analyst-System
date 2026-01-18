@@ -1,0 +1,93 @@
+{
+  "scenarios": [
+    {
+      "name": "brute_force_attack",
+      "description": "Multiple failed SSH login attempts followed by success",
+      "expected_severity": "high",
+      "expected_techniques": ["T1110", "T1078"],
+      "logs": [
+        "2024-01-15 10:30:00 AUTH FAILED user=admin src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:01 AUTH FAILED user=admin src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:02 AUTH FAILED user=root src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:03 AUTH FAILED user=admin src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:04 AUTH FAILED user=test src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:15 AUTH SUCCESS user=admin src=192.168.1.100 dst=10.0.0.50 service=ssh"
+      ]
+    },
+    {
+      "name": "sql_injection_attempt",
+      "description": "SQL injection in web application log",
+      "expected_severity": "high",
+      "expected_techniques": ["T1190"],
+      "logs": [
+        "2024-01-15 14:00:00 HTTP REQUEST src=203.0.113.50 dst=web-server.com method=GET path=/login.php?user=admin' OR '1'='1",
+        "2024-01-15 14:00:01 HTTP REQUEST src=203.0.113.50 dst=web-server.com method=GET path=/login.php?user=admin'; DROP TABLE users;--",
+        "2024-01-15 14:00:02 HTTP RESPONSE src=web-server.com dst=203.0.113.50 status=500 error='Database error'",
+        "2024-01-15 14:00:05 HTTP REQUEST src=203.0.113.50 dst=web-server.com method=POST path=/api/query body='SELECT * FROM users WHERE id=1 UNION SELECT password FROM admin'"
+      ]
+    },
+    {
+      "name": "ddos_pattern",
+      "description": "High volume of requests from single source indicating DDoS",
+      "expected_severity": "high",
+      "expected_techniques": ["T1499"],
+      "logs": [
+        "2024-01-15 16:00:00 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:00 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:00 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:00 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:01 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:01 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:01 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:01 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:02 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:02 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:02 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:02 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:03 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:03 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:03 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:03 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:04 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:04 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:04 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:04 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:05 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:05 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:05 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/",
+        "2024-01-15 16:00:05 HTTP REQUEST src=198.51.100.100 dst=web-server.com method=GET path=/"
+      ]
+    },
+    {
+      "name": "lateral_movement",
+      "description": "Unusual internal connections suggesting lateral movement",
+      "expected_severity": "high",
+      "expected_techniques": ["T1021", "T1078"],
+      "logs": [
+        "2024-01-15 11:00:00 RDP CONNECT src=10.0.0.25 dst=10.0.0.30 user=svc_admin",
+        "2024-01-15 11:00:05 ADMIN SHARE ACCESS src=10.0.0.30 share=\\\\10.0.0.40\\C$",
+        "2024-01-15 11:05:00 RDP CONNECT src=10.0.0.30 dst=10.0.0.35 user=svc_admin",
+        "2024-01-15 11:05:05 ADMIN SHARE ACCESS src=10.0.0.35 share=\\\\10.0.0.50\\C$",
+        "2024-01-15 11:10:00 RDP CONNECT src=10.0.0.35 dst=10.0.0.40 user=svc_admin",
+        "2024-01-15 11:10:05 PROCESS CREATE src=10.0.0.40 process=powershell.exe parent=cmd.exe user=svc_admin",
+        "2024-01-15 11:10:10 NETWORK CONNECT src=10.0.0.40 dst=external-c2.com port=443"
+      ]
+    },
+    {
+      "name": "normal_traffic",
+      "description": "Benign network traffic that should not trigger alerts",
+      "expected_severity": "low",
+      "expected_techniques": [],
+      "logs": [
+        "2024-01-15 09:00:00 HTTP REQUEST src=10.0.0.100 dst=example.com method=GET path=/ status=200",
+        "2024-01-15 09:00:05 HTTP REQUEST src=10.0.0.101 dst=example.com method=GET path=/api/status status=200",
+        "2024-01-15 09:00:10 DNS QUERY src=10.0.0.100 query=example.com type=A response=192.0.2.1",
+        "2024-01-15 09:00:15 AUTH SUCCESS user=employee@company.com src=10.0.0.100 method=password",
+        "2024-01-15 09:00:20 FILE ACCESS src=10.0.0.100 file=/home/user/document.pdf action=read",
+        "2024-01-15 09:00:25 EMAIL SEND src=10.0.0.100 to=colleague@company.com subject='Meeting Notes'",
+        "2024-01-15 09:00:30 SOFTWARE UPDATE name=system-patch status=success user=system"
+      ]
+    }
+  ]
+}
+

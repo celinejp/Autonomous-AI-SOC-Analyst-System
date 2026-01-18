@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 from collections import Counter
 
-from langchain_anthropic import ChatAnthropic
+from app.core.llm_factory import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
@@ -42,11 +42,7 @@ async def detection_agent(state: AgentState) -> AgentState:
         return state
 
     # Use LLM for pattern detection
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        temperature=0.1,
-        anthropic_api_key=settings.anthropic_api_key,
-    )
+    llm = get_llm(temperature=0.1)
 
     # Prepare log summary for LLM
     log_summary = _create_log_summary(logs)
@@ -61,6 +57,23 @@ async def detection_agent(state: AgentState) -> AgentState:
 
     # Parse alerts from LLM response
     alerts = _parse_alerts_from_response(content, logs)
+    
+    # Also run ATT&CK-based detection rules
+    from app.detection.attack_rules import evaluate_attack_rules
+    attack_alerts = evaluate_attack_rules(logs)
+    
+    # Convert ATT&CK alerts to Alert objects
+    for attack_alert in attack_alerts:
+        alerts.append(Alert(
+            timestamp=datetime.utcnow(),
+            severity=Severity(attack_alert["severity"]),
+            title=f"{attack_alert['name']} - {attack_alert['technique_id']}",
+            description=f"Detected {attack_alert['tactic']} technique: {attack_alert['name']}",
+            detection_rule=f"ATT&CK Rule: {attack_alert['technique_id']}",
+            related_logs=attack_alert.get("matched_logs", []),
+            mitre_techniques=[attack_alert["technique_id"]],
+            evidence=[{"rule": attack_alert["technique_id"], "confidence": attack_alert.get("confidence", 0.75)}],
+        ))
     
     # Also run rule-based detection as fallback
     rule_based_alerts = _rule_based_detection(logs)

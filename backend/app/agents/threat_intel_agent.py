@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List
 
-from langchain_anthropic import ChatAnthropic
+from app.core.llm_factory import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
@@ -33,11 +33,7 @@ async def threat_intel_agent(state: AgentState) -> AgentState:
         state["threat_intel"] = {}
         return state
 
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        temperature=0.1,
-        anthropic_api_key=settings.anthropic_api_key,
-    ).bind_tools([get_mitre_technique, search_mitre_techniques])
+    llm = get_llm(temperature=0.1).bind_tools([get_mitre_technique, search_mitre_techniques])
 
     threat_intel_data = {
         "mitre_techniques": [],

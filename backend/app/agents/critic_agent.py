@@ -3,28 +3,48 @@
 from datetime import datetime
 from typing import Any, Dict
 
-from langchain_anthropic import ChatAnthropic
+from app.core.llm_factory import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
 from app.core.config import settings
 from app.models.agent_state import AgentState
 
-SYSTEM_PROMPT = """You are a critic agent that reviews security incident analysis for quality and correctness.
+SYSTEM_PROMPT = """You are a critic agent that reviews security incident analysis for quality and correctness using comprehensive multi-dimensional checks.
 
-Your role is to:
-1. Check for logical inconsistencies in the analysis
-2. Validate that evidence supports conclusions
-3. Identify potential false positives
-4. Assess confidence levels appropriately
-5. Challenge assumptions and conclusions
-6. Identify gaps in reasoning or missing information
+Your role is to evaluate:
+1. **Evidence Corroboration**: Do multiple sources support the conclusion?
+2. **Alternative Explanations**: Have benign explanations been considered?
+3. **Completeness**: Does the report include all required sections?
+4. **Data Quality**: Is the data sufficient for the conclusions drawn?
+5. **Confidence Breakdown**: Are confidence levels appropriate for each aspect?
+6. **Clarity and Actionability**: Can SOC analysts act on this report?
+
+Required Report Sections:
+- Executive Summary (business-focused, 2-3 sentences)
+- Technical Findings with MITRE ATT&CK mapping
+- Attack Timeline (chronological)
+- Root Cause Analysis
+- Scope Assessment
+- Indicators of Compromise (structured IOCs)
+- Confidence Assessment (with breakdown)
+- Regulatory Impact (if applicable)
+- Detection Gaps
+- Lessons Learned
 
 For each analysis, provide:
-- confidence_score (0.0-1.0) - How confident is the analysis?
-- needs_revision (true/false) - Does this need to be revised?
-- feedback (string) - Specific feedback for improvement
-- false_positive_likelihood (0.0-1.0) - Could this be a false positive?
+- confidence_score (0.0-1.0) - Overall confidence
+- detection_confidence (0.0-1.0) - Confidence in detection accuracy
+- attribution_confidence (0.0-1.0) - Confidence in attacker attribution
+- scope_confidence (0.0-1.0) - Confidence in scope assessment
+- timeline_confidence (0.0-1.0) - Confidence in timeline accuracy
+- needs_revision (true/false) - Does this need revision?
+- feedback (list of strings) - Specific feedback items
+- false_positive_likelihood (0.0-1.0) - False positive probability
+- benign_explanations (list) - Alternative benign scenarios considered
+- missing_data (list) - Critical data gaps
+- clarity_score (0.0-1.0) - Report clarity
+- actionability_score (0.0-1.0) - How actionable are recommendations?
 
 Be thorough but fair. Flag issues that need correction, but don't be overly critical of valid analysis."""
 
@@ -42,25 +62,39 @@ async def critic_agent(state: AgentState) -> AgentState:
         state["needs_revision"] = False
         return state
 
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        temperature=0.1,
-        anthropic_api_key=settings.anthropic_api_key,
-    )
+    llm = get_llm(temperature=0.1)
 
-    # Prepare critique context
+    # Prepare comprehensive critique context
+    has_iocs = bool(incident_report.indicators_of_compromise) if hasattr(incident_report, 'indicators_of_compromise') and incident_report.indicators_of_compromise else False
+    has_regulatory = bool(incident_report.regulatory_impact) if hasattr(incident_report, 'regulatory_impact') and incident_report.regulatory_impact else False
+    has_detection_gaps = bool(incident_report.detection_gaps) if hasattr(incident_report, 'detection_gaps') and incident_report.detection_gaps else False
+    has_lessons = bool(incident_report.lessons_learned) if hasattr(incident_report, 'lessons_learned') and incident_report.lessons_learned else False
+    
     critique_context = f"""
 INCIDENT REPORT:
-Executive Summary: {incident_report.executive_summary}
+Executive Summary: {incident_report.executive_summary[:300]}
 Technical Findings: {incident_report.technical_findings[:500]}
 Root Cause: {incident_report.root_cause}
+Impact Assessment: {incident_report.impact_assessment[:300]}
 Confidence Score: {incident_report.confidence_score}
+Timeline Events: {len(incident_report.timeline)}
+Affected Assets: {len(incident_report.affected_assets)}
 Reasoning Steps: {len(incident_report.reasoning_process)}
 
+REPORT COMPLETENESS:
+- Has Executive Summary: Yes
+- Has Technical Findings: Yes
+- Has Timeline: {len(incident_report.timeline) > 0}
+- Has IOCs: {has_iocs}
+- Has Regulatory Impact: {has_regulatory}
+- Has Detection Gaps: {has_detection_gaps}
+- Has Lessons Learned: {has_lessons}
+
 ALERTS:
-{chr(10).join(f"- [{a.severity.value}] {a.title}: {a.description[:100]}" for a in alerts[:5]))}
+{chr(10).join(f"- [{a.severity.value}] {a.title}: {a.description[:100]} (MITRE: {', '.join(a.mitre_techniques[:3])})" for a in alerts[:5])}
 
 LOGS ANALYZED: {len(logs)}
+LOG SOURCES: {', '.join(set(log.log_source.value for log in logs[:10]))}
 """
 
     messages = [

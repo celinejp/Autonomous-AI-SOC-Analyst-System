@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List
 
-from langchain_anthropic import ChatAnthropic
+from app.core.llm_factory import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
@@ -13,28 +13,63 @@ from app.models.incident import IncidentReport, Severity
 from app.tools.similarity_search import search_similar_incidents
 from app.tools.ip_lookup import lookup_ip
 
-SYSTEM_PROMPT = """You are a senior SOC analyst agent. Your role is to perform deep analysis of security alerts and threat intelligence to create comprehensive incident reports.
+SYSTEM_PROMPT = """You are a Tier 2 SOC Analyst performing deep investigation.
 
-You must:
-1. Analyze all alerts and determine root cause
-2. Reconstruct the attack chain/timeline
-3. Assess the potential business impact
-4. Identify affected assets and systems
-5. Provide detailed technical findings
-6. Generate an executive summary for leadership
+Your analysis MUST include these sections:
 
-Use multi-hop reasoning to connect dots between alerts, logs, and threat intelligence.
-Be thorough but also efficient. Explain your reasoning process transparently.
+## Executive Summary
+- 2-3 sentences maximum
+- Business impact focus, no technical jargon
+- Severity and recommended urgency
 
-Output a structured incident report with:
-- executive_summary
-- technical_findings
-- timeline (list of events)
-- affected_assets
-- root_cause
-- impact_assessment
-- confidence_score (0.0-1.0)
-- reasoning_process (list of reasoning steps)"""
+## Technical Analysis
+### Attack Timeline
+- Chronological sequence of attacker actions
+- Include timestamps, systems, and users involved
+
+### MITRE ATT&CK Mapping
+- List all identified techniques with IDs (e.g., T1110.001)
+- Explain how each technique was observed
+
+### Root Cause Analysis
+- Initial access vector
+- Vulnerabilities or misconfigurations exploited
+- Contributing factors
+
+### Scope Assessment
+- All confirmed affected systems
+- Potential lateral movement paths
+- Data at risk (classification and volume)
+
+## Indicators of Compromise
+Format as structured list:
+- IP addresses with reputation and recommended action
+- Domains with context
+- File hashes with malware family if known
+- Email addresses if relevant
+
+## Confidence Assessment
+- Overall confidence (0-100%)
+- Detection confidence
+- Scope confidence
+- What evidence is missing that would increase confidence
+
+## Regulatory Considerations
+- Applicable regulations based on data types involved
+- Notification requirements and deadlines
+- Recommended legal/compliance actions
+
+## Detection Gaps
+- What telemetry was missing
+- What additional logging would help
+- Proposed detection rules (in pseudocode or natural language)
+
+## Lessons Learned
+- What security controls failed or were absent
+- Process improvements needed
+- Training recommendations
+
+Be concise and actionable. Prioritize findings by business impact."""
 
 
 async def analyst_agent(state: AgentState) -> AgentState:
@@ -48,11 +83,7 @@ async def analyst_agent(state: AgentState) -> AgentState:
         state["incident_report"] = None
         return state
 
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        temperature=0.2,  # Slightly higher for more creative reasoning
-        anthropic_api_key=settings.anthropic_api_key,
-    ).bind_tools([search_similar_incidents, lookup_ip])
+    llm = get_llm(temperature=0.2).bind_tools([search_similar_incidents, lookup_ip])
 
     # Prepare analysis context
     alerts_summary = "\n".join([
