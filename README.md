@@ -1,12 +1,12 @@
-# 🛡️ Autonomous AI SOC Analyst System
+# Autonomous AI SOC Analyst System
 
 A production-ready, multi-agent Security Operations Center (SOC) analyst system powered by AI. This system demonstrates advanced agentic reasoning capabilities for cybersecurity threat detection and response using cutting-edge 2025 technologies.
 
-## 🎯 Overview
+## Overview
 
 This system autonomously analyzes security logs, detects threats, enriches findings with threat intelligence, performs deep analysis, and generates actionable response plans. It features a multi-agent architecture orchestrated by LangGraph, with reflection loops for self-correction and continuous improvement.
 
-### ✨ Key Features
+### Key Features
 
 - **6 Specialized AI Agents**: Each with distinct roles (Ingest, Detection, Threat Intel, Analyst, Response Planner, Critic)
 - **LangGraph Orchestration**: State machine with conditional routing and reflection loops
@@ -19,7 +19,7 @@ This system autonomously analyzes security logs, detects threats, enriches findi
 - **Production-Ready**: Docker containerization, proper error handling, structured logging
 - **Advanced UI**: shadcn/ui components, Recharts visualizations, Attack Graph visualization
 
-## 🏗️ Architecture
+## Architecture
 
 ### Agent Workflow
 
@@ -87,7 +87,7 @@ This system autonomously analyzes security logs, detects threats, enriches findi
 - **Charts**: Recharts
 - **Visualizations**: Canvas-based Attack Graph
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
