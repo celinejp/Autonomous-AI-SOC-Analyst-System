@@ -169,7 +169,7 @@ This system autonomously analyzes security logs, detects threats, enriches findi
 docker-compose down
 ```
 
-## 📖 Usage Guide
+## Usage Guide
 
 ### 1. Upload Security Logs
 
@@ -240,7 +240,7 @@ Navigate to `/insights` for:
 
 Full API docs available at `/docs` when running.
 
-## 📊 System Capabilities
+## System Capabilities
 
 ### Detection Rules (24+ ATT&CK Techniques)
 
