@@ -1,0 +1,425 @@
+{
+  "version": "1.0",
+  "description": "Ground truth labeled incidents for QA validation",
+  "created_at": "2025-01-15",
+  "incidents": [
+    {
+      "id": "gt-001",
+      "name": "Brute Force SSH Attack",
+      "is_true_positive": true,
+      "severity": "high",
+      "category": "credential_access",
+      "mitre_techniques": ["T1110", "T1078"],
+      "iocs": {
+        "ips": ["192.168.1.100", "10.0.0.50"],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Multiple failed SSH login attempts from external IP followed by successful authentication",
+      "raw_logs": [
+        "2024-01-15 10:30:00 AUTH FAILED user=admin src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:01 AUTH FAILED user=admin src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:02 AUTH FAILED user=root src=192.168.1.100 dst=10.0.0.50 service=ssh",
+        "2024-01-15 10:30:15 AUTH SUCCESS user=admin src=192.168.1.100 dst=10.0.0.50 service=ssh"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 3
+    },
+    {
+      "id": "gt-002",
+      "name": "Ransomware Execution",
+      "is_true_positive": true,
+      "severity": "critical",
+      "category": "impact",
+      "mitre_techniques": ["T1486", "T1059", "T1083"],
+      "iocs": {
+        "ips": ["203.0.113.50"],
+        "domains": ["malware-c2.evil.com"],
+        "file_hashes": ["a1b2c3d4e5f6789012345678abcdef"]
+      },
+      "description": "Ransomware payload execution with file encryption and C2 communication",
+      "raw_logs": [
+        "2024-01-15 14:00:00 PROCESS CREATE name=cryptor.exe parent=powershell.exe user=SYSTEM",
+        "2024-01-15 14:00:05 FILE MODIFIED path=C:\\Users\\*.docx count=150",
+        "2024-01-15 14:00:10 NETWORK CONNECT dst=203.0.113.50:443 process=cryptor.exe",
+        "2024-01-15 14:00:15 FILE CREATE path=C:\\Users\\README_DECRYPT.txt"
+      ],
+      "expected_alerts": 3,
+      "expected_severity_min": 4
+    },
+    {
+      "id": "gt-003",
+      "name": "Lateral Movement via RDP",
+      "is_true_positive": true,
+      "severity": "high",
+      "category": "lateral_movement",
+      "mitre_techniques": ["T1021.001", "T1078"],
+      "iocs": {
+        "ips": ["10.0.0.25", "10.0.0.30", "10.0.0.35"],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Compromised account used to RDP to multiple internal hosts",
+      "raw_logs": [
+        "2024-01-15 11:00:00 RDP CONNECT src=10.0.0.25 dst=10.0.0.30 user=svc_admin",
+        "2024-01-15 11:05:00 RDP CONNECT src=10.0.0.30 dst=10.0.0.35 user=svc_admin",
+        "2024-01-15 11:10:00 ADMIN SHARE ACCESS src=10.0.0.35 share=\\\\10.0.0.40\\C$"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 3
+    },
+    {
+      "id": "gt-004",
+      "name": "Phishing Email Delivery",
+      "is_true_positive": true,
+      "severity": "medium",
+      "category": "initial_access",
+      "mitre_techniques": ["T1566.001", "T1204"],
+      "iocs": {
+        "ips": [],
+        "domains": ["secure-login.phishing.com"],
+        "file_hashes": ["def456789abc123456789"]
+      },
+      "description": "Phishing email with malicious attachment opened by user",
+      "raw_logs": [
+        "2024-01-15 09:00:00 EMAIL RECEIVED from=attacker@phishing.com to=victim@company.com subject='Urgent: Password Reset'",
+        "2024-01-15 09:05:00 ATTACHMENT OPENED file=password_reset.docm user=victim",
+        "2024-01-15 09:05:05 MACRO EXECUTION file=password_reset.docm"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 2
+    },
+    {
+      "id": "gt-005",
+      "name": "Credential Dumping",
+      "is_true_positive": true,
+      "severity": "critical",
+      "category": "credential_access",
+      "mitre_techniques": ["T1003.001", "T1003.002"],
+      "iocs": {
+        "ips": ["10.0.0.100"],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Mimikatz execution to dump credentials from memory",
+      "raw_logs": [
+        "2024-01-15 15:00:00 PROCESS CREATE name=mimikatz.exe parent=cmd.exe user=admin",
+        "2024-01-15 15:00:01 LSASS ACCESS process=mimikatz.exe target=lsass.exe access=READ",
+        "2024-01-15 15:00:05 FILE CREATE path=C:\\temp\\creds.txt"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 4
+    },
+    {
+      "id": "gt-006",
+      "name": "Data Exfiltration",
+      "is_true_positive": true,
+      "severity": "critical",
+      "category": "exfiltration",
+      "mitre_techniques": ["T1048", "T1567"],
+      "iocs": {
+        "ips": ["198.51.100.50"],
+        "domains": ["upload.anonymous-storage.com"],
+        "file_hashes": []
+      },
+      "description": "Large data transfer to external storage service",
+      "raw_logs": [
+        "2024-01-15 22:00:00 FILE ACCESS path=\\\\fileserver\\confidential count=500",
+        "2024-01-15 22:05:00 ARCHIVE CREATE path=C:\\temp\\data.zip size=2GB",
+        "2024-01-15 22:10:00 HTTP POST dst=upload.anonymous-storage.com size=2GB"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 4
+    },
+    {
+      "id": "gt-007",
+      "name": "Privilege Escalation",
+      "is_true_positive": true,
+      "severity": "high",
+      "category": "privilege_escalation",
+      "mitre_techniques": ["T1068", "T1548"],
+      "iocs": {
+        "ips": ["10.0.0.75"],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Exploitation of local vulnerability for privilege escalation",
+      "raw_logs": [
+        "2024-01-15 13:00:00 PROCESS CREATE name=exploit.exe user=lowpriv",
+        "2024-01-15 13:00:01 PRIVILEGE CHANGE user=lowpriv new_priv=SYSTEM",
+        "2024-01-15 13:00:05 SERVICE CREATE name=backdoor user=SYSTEM"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 3
+    },
+    {
+      "id": "gt-008",
+      "name": "C2 Beacon Communication",
+      "is_true_positive": true,
+      "severity": "high",
+      "category": "command_and_control",
+      "mitre_techniques": ["T1071", "T1573"],
+      "iocs": {
+        "ips": ["185.123.45.67"],
+        "domains": ["cdn-static.legitimate-looking.com"],
+        "file_hashes": []
+      },
+      "description": "Regular beacon communication to C2 infrastructure",
+      "raw_logs": [
+        "2024-01-15 08:00:00 HTTPS CONNECT dst=cdn-static.legitimate-looking.com interval=300s",
+        "2024-01-15 08:05:00 HTTPS CONNECT dst=cdn-static.legitimate-looking.com interval=300s",
+        "2024-01-15 08:10:00 HTTPS CONNECT dst=cdn-static.legitimate-looking.com interval=300s"
+      ],
+      "expected_alerts": 1,
+      "expected_severity_min": 3
+    },
+    {
+      "id": "gt-009",
+      "name": "Process Injection",
+      "is_true_positive": true,
+      "severity": "high",
+      "category": "defense_evasion",
+      "mitre_techniques": ["T1055", "T1055.001"],
+      "iocs": {
+        "ips": [],
+        "domains": [],
+        "file_hashes": ["abc123def456"]
+      },
+      "description": "Malware injecting code into legitimate process",
+      "raw_logs": [
+        "2024-01-15 16:00:00 PROCESS CREATE name=malware.exe",
+        "2024-01-15 16:00:01 MEMORY WRITE target=explorer.exe source=malware.exe",
+        "2024-01-15 16:00:02 THREAD CREATE target=explorer.exe source=malware.exe"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 3
+    },
+    {
+      "id": "gt-010",
+      "name": "Persistence via Registry",
+      "is_true_positive": true,
+      "severity": "medium",
+      "category": "persistence",
+      "mitre_techniques": ["T1547.001", "T1112"],
+      "iocs": {
+        "ips": [],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Malware establishing persistence through registry run key",
+      "raw_logs": [
+        "2024-01-15 17:00:00 REGISTRY MODIFY key=HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run value=backdoor.exe"
+      ],
+      "expected_alerts": 1,
+      "expected_severity_min": 2
+    },
+    {
+      "id": "gt-011",
+      "name": "Normal Admin Activity",
+      "is_true_positive": false,
+      "severity": "low",
+      "category": "benign",
+      "mitre_techniques": [],
+      "iocs": {
+        "ips": [],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Legitimate administrator performing routine maintenance",
+      "raw_logs": [
+        "2024-01-15 09:00:00 RDP CONNECT src=admin-workstation dst=server01 user=it_admin",
+        "2024-01-15 09:05:00 SOFTWARE INSTALL name=SecurityPatch-KB123 user=it_admin",
+        "2024-01-15 09:30:00 SERVICE RESTART name=WindowsUpdate user=it_admin"
+      ],
+      "expected_alerts": 0,
+      "expected_severity_min": 1
+    },
+    {
+      "id": "gt-012",
+      "name": "Scheduled Backup",
+      "is_true_positive": false,
+      "severity": "low",
+      "category": "benign",
+      "mitre_techniques": [],
+      "iocs": {
+        "ips": ["10.0.0.200"],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Normal scheduled backup operation",
+      "raw_logs": [
+        "2024-01-15 02:00:00 BACKUP START job=nightly-backup",
+        "2024-01-15 02:30:00 FILE COPY count=10000 dst=\\\\backup-server\\backups",
+        "2024-01-15 03:00:00 BACKUP COMPLETE job=nightly-backup status=success"
+      ],
+      "expected_alerts": 0,
+      "expected_severity_min": 1
+    },
+    {
+      "id": "gt-013",
+      "name": "Developer Testing",
+      "is_true_positive": false,
+      "severity": "low",
+      "category": "benign",
+      "mitre_techniques": [],
+      "iocs": {
+        "ips": [],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Developer running security testing tools in approved environment",
+      "raw_logs": [
+        "2024-01-15 14:00:00 PROCESS CREATE name=nmap.exe user=developer env=testing",
+        "2024-01-15 14:05:00 PORT SCAN src=dev-workstation dst=test-server",
+        "2024-01-15 14:10:00 VULNERABILITY SCAN tool=nessus target=test-environment"
+      ],
+      "expected_alerts": 0,
+      "expected_severity_min": 1
+    },
+    {
+      "id": "gt-014",
+      "name": "False Positive - VPN Connection",
+      "is_true_positive": false,
+      "severity": "low",
+      "category": "false_positive",
+      "mitre_techniques": [],
+      "iocs": {
+        "ips": ["203.0.113.100"],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Legitimate VPN connection from traveling employee",
+      "raw_logs": [
+        "2024-01-15 06:00:00 VPN CONNECT src=203.0.113.100 user=employee@company.com geo=foreign_country",
+        "2024-01-15 06:05:00 AUTH SUCCESS user=employee@company.com method=MFA"
+      ],
+      "expected_alerts": 0,
+      "expected_severity_min": 1
+    },
+    {
+      "id": "gt-015",
+      "name": "False Positive - Cloud Sync",
+      "is_true_positive": false,
+      "severity": "low",
+      "category": "false_positive",
+      "mitre_techniques": [],
+      "iocs": {
+        "ips": [],
+        "domains": ["onedrive.live.com"],
+        "file_hashes": []
+      },
+      "description": "Normal OneDrive file synchronization",
+      "raw_logs": [
+        "2024-01-15 10:00:00 HTTP POST dst=onedrive.live.com size=500MB user=employee",
+        "2024-01-15 10:30:00 HTTP POST dst=onedrive.live.com size=200MB user=employee"
+      ],
+      "expected_alerts": 0,
+      "expected_severity_min": 1
+    },
+    {
+      "id": "gt-016",
+      "name": "Web Shell Upload",
+      "is_true_positive": true,
+      "severity": "critical",
+      "category": "persistence",
+      "mitre_techniques": ["T1505.003", "T1059.001"],
+      "iocs": {
+        "ips": ["192.0.2.100"],
+        "domains": [],
+        "file_hashes": ["webshell123abc"]
+      },
+      "description": "Web shell uploaded to web server",
+      "raw_logs": [
+        "2024-01-15 20:00:00 HTTP POST /upload.php src=192.0.2.100 file=shell.aspx",
+        "2024-01-15 20:00:05 FILE CREATE path=C:\\inetpub\\wwwroot\\shell.aspx",
+        "2024-01-15 20:01:00 HTTP GET /shell.aspx?cmd=whoami src=192.0.2.100"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 4
+    },
+    {
+      "id": "gt-017",
+      "name": "DNS Tunneling",
+      "is_true_positive": true,
+      "severity": "high",
+      "category": "exfiltration",
+      "mitre_techniques": ["T1071.004", "T1048"],
+      "iocs": {
+        "ips": [],
+        "domains": ["data.evil-dns.com"],
+        "file_hashes": []
+      },
+      "description": "Data exfiltration via DNS queries",
+      "raw_logs": [
+        "2024-01-15 21:00:00 DNS QUERY type=TXT name=aGVsbG8gd29ybGQ.data.evil-dns.com",
+        "2024-01-15 21:00:01 DNS QUERY type=TXT name=dGhpcyBpcyBkYXRh.data.evil-dns.com",
+        "2024-01-15 21:00:02 DNS QUERY type=TXT name=ZXhmaWx0cmF0aW9u.data.evil-dns.com"
+      ],
+      "expected_alerts": 1,
+      "expected_severity_min": 3
+    },
+    {
+      "id": "gt-018",
+      "name": "Benign Software Update",
+      "is_true_positive": false,
+      "severity": "low",
+      "category": "benign",
+      "mitre_techniques": [],
+      "iocs": {
+        "ips": [],
+        "domains": ["update.microsoft.com"],
+        "file_hashes": []
+      },
+      "description": "Normal Windows Update process",
+      "raw_logs": [
+        "2024-01-15 03:00:00 HTTPS CONNECT dst=update.microsoft.com process=wuauclt.exe",
+        "2024-01-15 03:30:00 FILE DOWNLOAD size=500MB dst=C:\\Windows\\SoftwareDistribution",
+        "2024-01-15 04:00:00 SERVICE RESTART name=wuauserv reason=update"
+      ],
+      "expected_alerts": 0,
+      "expected_severity_min": 1
+    },
+    {
+      "id": "gt-019",
+      "name": "Supply Chain Compromise",
+      "is_true_positive": true,
+      "severity": "critical",
+      "category": "initial_access",
+      "mitre_techniques": ["T1195.002", "T1059"],
+      "iocs": {
+        "ips": ["198.51.100.200"],
+        "domains": ["updates.compromised-vendor.com"],
+        "file_hashes": ["malicious_update_hash"]
+      },
+      "description": "Malicious software update from compromised vendor",
+      "raw_logs": [
+        "2024-01-15 12:00:00 SOFTWARE UPDATE name=vendor-software src=updates.compromised-vendor.com",
+        "2024-01-15 12:00:30 PROCESS CREATE name=vendor-software.exe child=powershell.exe",
+        "2024-01-15 12:00:35 NETWORK CONNECT dst=198.51.100.200:443 process=powershell.exe"
+      ],
+      "expected_alerts": 2,
+      "expected_severity_min": 4
+    },
+    {
+      "id": "gt-020",
+      "name": "Benign Port Scan from Security Team",
+      "is_true_positive": false,
+      "severity": "low",
+      "category": "benign",
+      "mitre_techniques": [],
+      "iocs": {
+        "ips": ["10.0.0.250"],
+        "domains": [],
+        "file_hashes": []
+      },
+      "description": "Authorized vulnerability scan from security team",
+      "raw_logs": [
+        "2024-01-15 01:00:00 PORT SCAN src=10.0.0.250 dst=10.0.0.0/24 approved=true scanner=Nessus",
+        "2024-01-15 01:30:00 VULNERABILITY SCAN src=10.0.0.250 target=production approved=true"
+      ],
+      "expected_alerts": 0,
+      "expected_severity_min": 1
+    }
+  ]
+}
+

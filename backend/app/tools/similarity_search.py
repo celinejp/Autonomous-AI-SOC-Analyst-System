@@ -1,19 +1,23 @@
 """Tool for semantic similarity search of past incidents."""
 
 from typing import Dict, Any, List
+import asyncio
 
 from langchain.tools import tool
 
 from app.database.vector_store import search_vectors
+from app.database.redis_client import cache_get_json, cache_set_json
 
 
 @tool
 def search_similar_incidents(description: str, limit: int = 5) -> str:
     """Search for similar past incidents using semantic similarity.
     
-    This tool searches through historical incidents to find cases with similar
-    attack patterns, behaviors, or indicators. Helps identify recurring threats
-    and apply lessons learned from previous incidents.
+    This tool searches through historical incidents stored in Qdrant vector database
+    to find cases with similar attack patterns, behaviors, or indicators. Helps identify
+    recurring threats and apply lessons learned from previous incidents.
+    
+    Uses Redis caching to improve performance.
     
     Args:
         description: Natural language description of the current incident
@@ -27,6 +31,19 @@ def search_similar_incidents(description: str, limit: int = 5) -> str:
         - resolution: How it was resolved
         - mitre_techniques: Associated MITRE techniques
     """
+    # Check cache first
+    cache_key = f"similar_incidents:{hash(description)}:{limit}"
+    
+    try:
+        loop = asyncio.get_event_loop()
+        cached_result = loop.run_until_complete(cache_get_json(cache_key))
+        if cached_result:
+            return f"Similar Incidents for '{description[:50]}...' (cached): {cached_result}"
+    except (RuntimeError, Exception):
+        cached_result = None
+    
+    # Generate embedding for description (mock - in production use OpenAI/sentence-transformers)
+    # For now, return mock results
     # In production, this would:
     # 1. Generate embedding for description
     # 2. Search Qdrant incident collection
@@ -50,5 +67,11 @@ def search_similar_incidents(description: str, limit: int = 5) -> str:
         },
     ]
     
+    # Cache the result for 1 hour
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(cache_set_json(cache_key, results[:limit], ttl=3600))
+    except (RuntimeError, Exception):
+        pass
+    
     return f"Similar Incidents for '{description[:50]}...': {results[:limit]}"
-

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List
 
-from langchain_anthropic import ChatAnthropic
+from app.core.llm_factory import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
@@ -51,11 +51,7 @@ async def response_planner_agent(state: AgentState) -> AgentState:
         state["response_plan"] = None
         return state
 
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        temperature=0.1,
-        anthropic_api_key=settings.anthropic_api_key,
-    )
+    llm = get_llm(temperature=0.1)
 
     # Prepare context
     report_summary = f"""

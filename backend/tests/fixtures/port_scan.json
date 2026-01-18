@@ -1,0 +1,41 @@
+{
+  "source": "firewall_logs",
+  "log_type": "network",
+  "description": "Network Reconnaissance - Port scanning behavior from single source to multiple ports",
+  "logs": [
+    "2025-01-15 12:00:00 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=22 status=closed",
+    "2025-01-15 12:00:01 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=80 status=open",
+    "2025-01-15 12:00:02 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=443 status=open",
+    "2025-01-15 12:00:03 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=3389 status=closed",
+    "2025-01-15 12:00:04 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=21 status=closed",
+    "2025-01-15 12:00:05 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=25 status=closed",
+    "2025-01-15 12:00:06 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=110 status=closed",
+    "2025-01-15 12:00:07 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=143 status=closed",
+    "2025-01-15 12:00:08 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=993 status=closed",
+    "2025-01-15 12:00:09 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=1433 status=closed",
+    "2025-01-15 12:00:10 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=3306 status=closed",
+    "2025-01-15 12:00:11 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=5432 status=closed",
+    "2025-01-15 12:00:12 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=27017 status=closed",
+    "2025-01-15 12:00:13 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=5984 status=closed",
+    "2025-01-15 12:00:14 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=6379 status=closed",
+    "2025-01-15 12:00:15 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=9200 status=closed",
+    "2025-01-15 12:00:16 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=8080 status=open",
+    "2025-01-15 12:00:17 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=8443 status=closed",
+    "2025-01-15 12:00:18 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=9000 status=closed",
+    "2025-01-15 12:00:19 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=5000 status=closed",
+    "2025-01-15 12:00:20 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=5985 status=closed",
+    "2025-01-15 12:00:21 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=5986 status=closed",
+    "2025-01-15 12:00:22 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=161 status=closed",
+    "2025-01-15 12:00:23 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=162 status=closed",
+    "2025-01-15 12:00:24 firewall TCP CONNECTION src=198.51.100.23 dst=192.168.1.100 port=514 status=closed"
+  ],
+  "expected_detection": {
+    "should_alert": true,
+    "min_severity": "medium",
+    "mitre_techniques": ["T1046"],
+    "attack_type": "discovery",
+    "min_alerts": 1,
+    "reasoning": "25+ connection attempts to different ports from single source IP indicates port scanning/reconnaissance activity"
+  }
+}
+

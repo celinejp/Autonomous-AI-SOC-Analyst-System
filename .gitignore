@@ -64,3 +64,10 @@ logs/
 # Docker
 docker-compose.override.yml
 
+# Test scripts (temporary)
+test_cloud_logs.sh
+
+# Documentation (keep main docs, remove temp)
+# Keep: README.md, PROJECT_OVERVIEW.md, PROJECT_SUMMARY.md
+# Keep: docs/ folder
+

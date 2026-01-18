@@ -1,0 +1,26 @@
+{
+  "source": "web_logs",
+  "log_type": "web_server",
+  "description": "SQL Injection Attempt - Web application attack with SQL syntax and sqlmap user agent",
+  "logs": [
+    "2025-01-15 11:00:00 webserver GET /login.php?username=admin' OR '1'='1&password=anything HTTP/1.1 200 - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:01 webserver GET /login.php?username=admin'; DROP TABLE users;-- HTTP/1.1 200 - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:02 webserver POST /search.php?q=test' UNION SELECT * FROM users-- HTTP/1.1 500 - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:03 webserver GET /products.php?id=1 OR 1=1 HTTP/1.1 200 - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:04 webserver POST /login.php HTTP/1.1 200 - \"sqlmap/1.0\" body=\"username=admin' OR '1'='1'--&password=test\"",
+    "2025-01-15 11:00:05 webserver GET /user.php?id=1' AND (SELECT SUBSTRING(@@version,1,1))='5'-- HTTP/1.1 200 - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:06 webserver POST /search.php?query='; EXEC xp_cmdshell('dir')-- HTTP/1.1 500 - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:07 webserver GET /cart.php?id=-1 UNION SELECT username,password FROM users-- HTTP/1.1 200 - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:08 webserver POST /login.php HTTP/1.1 500 error=\"Database connection failed\" - \"sqlmap/1.0\"",
+    "2025-01-15 11:00:09 webserver GET /admin.php?id=1' AND SLEEP(5)-- HTTP/1.1 200 - \"sqlmap/1.0\""
+  ],
+  "expected_detection": {
+    "should_alert": true,
+    "min_severity": "high",
+    "mitre_techniques": ["T1190"],
+    "attack_type": "initial_access",
+    "min_alerts": 1,
+    "reasoning": "SQL injection syntax patterns (OR '1'='1, UNION SELECT, DROP TABLE, sqlmap user agent) indicate automated SQL injection attack"
+  }
+}
+
