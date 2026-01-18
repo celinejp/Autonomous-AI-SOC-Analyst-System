@@ -67,7 +67,7 @@ def cache_response(
             redis = get_redis_client()
             if redis:
                 try:
-                    cached = redis.get(cache_key)
+                    cached = await redis.get(cache_key)
                     if cached:
                         logger.debug(f"Cache hit: {cache_key}")
                         return json.loads(cached)
@@ -80,10 +80,16 @@ def cache_response(
             # Store in cache
             if redis:
                 try:
-                    redis.setex(
+                    # Serialize Pydantic models to dict if needed
+                    if hasattr(result, '__dict__') or hasattr(result, 'model_dump'):
+                        serializable_result = result.model_dump() if hasattr(result, 'model_dump') else [item.model_dump() if hasattr(item, 'model_dump') else item for item in result] if isinstance(result, list) else result
+                    else:
+                        serializable_result = result
+                    
+                    await redis.setex(
                         cache_key,
                         ttl,
-                        json.dumps(result, default=str)
+                        json.dumps(serializable_result, default=str)
                     )
                     logger.debug(f"Cache set: {cache_key} (TTL: {ttl}s)")
                 except Exception as e:

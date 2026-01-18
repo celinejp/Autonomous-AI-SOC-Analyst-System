@@ -54,15 +54,23 @@ async def list_incidents(
     
     incidents = []
     for model in incident_models:
-        incident = await IncidentRepository.model_to_pydantic(model)
-        
-        # Field filtering
-        if fields:
-            field_set = set(f.strip() for f in fields.split(","))
-            filtered = {k: v for k, v in incident.dict().items() if k in field_set}
-            incidents.append(filtered)
-        else:
-            incidents.append(incident)
+        try:
+            incident = await IncidentRepository.model_to_pydantic(model)
+            
+            # Field filtering
+            if fields:
+                field_set = set(f.strip() for f in fields.split(","))
+                # Use model_dump() for Pydantic v2 or dict() for v1
+                incident_dict = incident.model_dump() if hasattr(incident, 'model_dump') else incident.dict()
+                filtered = {k: v for k, v in incident_dict.items() if k in field_set}
+                incidents.append(filtered)
+            else:
+                # Convert to dict for JSON serialization
+                incident_dict = incident.model_dump() if hasattr(incident, 'model_dump') else incident.dict()
+                incidents.append(incident_dict)
+        except Exception as e:
+            logger.error(f"Error converting incident model {model.id}: {e}")
+            continue
     
     return incidents
 
@@ -82,7 +90,9 @@ async def get_incident(
     if not incident_model:
         raise HTTPException(status_code=404, detail="Incident not found")
     
-    return await IncidentRepository.model_to_pydantic(incident_model)
+    incident = await IncidentRepository.model_to_pydantic(incident_model)
+    # Convert to dict for JSON serialization
+    return incident.model_dump() if hasattr(incident, 'model_dump') else incident.dict()
 
 
 @router.post("", response_model=Incident)
