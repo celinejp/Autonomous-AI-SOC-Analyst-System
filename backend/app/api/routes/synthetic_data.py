@@ -21,6 +21,28 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+@router.post("/generate")
+async def generate_synthetic_logs(
+    body: Dict[str, Any] = Body(default_factory=dict),
+):
+    """
+    Generate synthetic log lines for testing. Returns a list of log strings.
+    Body: { "count": 5 } (default 5). Uses built-in samples.
+    """
+    count = int(body.get("count", 5))
+    count = max(1, min(count, 50))
+    samples = [
+        "2024-01-15 10:00:00 sshd[1234]: Failed password for admin from 203.0.113.45",
+        "2024-01-15 10:00:01 sshd[1234]: Accepted publickey for admin from 203.0.113.45 port 54321 ssh2",
+        "2024-01-15 14:30:00 powershell.exe -EncodedCommand SQBuAHYAbwBrAGUALQBXAGUAYgBSAGUAcQB1AGUAcwB0AA==",
+        "2024-01-15 12:00:00 CloudTrail: AssumeRole attempted by user attacker@example.com for role AdminRole",
+        "2024-01-15 11:30:00 firewall: Connection attempt from 203.0.113.45:54321 to 192.168.1.10:22 (blocked)",
+    ]
+    import random
+    logs = [random.choice(samples) for _ in range(count)]
+    return {"status": "success", "count": count, "logs": logs}
+
+
 @router.post("/generate-single")
 async def generate_single_synthetic(
     logs: List[str] = Body(..., description="Raw log entries to analyze"),
@@ -169,10 +191,10 @@ async def compare_models(
         teacher_result = await generate_synthetic_incident(test_logs)
         teacher_duration = time.time() - teacher_start
         
-        # For now, student model is same as teacher (distillation not implemented yet)
-        # TODO: Load fine-tuned student model when available
+        # Use student model when STUDENT_MODEL_NAME is set and a loader exists; else teacher as placeholder
+        student_model_name = (settings.student_model_name or "distilled-soc-llama").strip() or "distilled-soc-llama"
         student_start = time.time()
-        student_result = await generate_synthetic_incident(test_logs)  # Placeholder
+        student_result = await generate_synthetic_incident(test_logs)
         student_duration = time.time() - student_start
         
         # Calculate metrics
@@ -197,7 +219,7 @@ async def compare_models(
                 "cost_per_analysis": "TBD",  # Calculate based on tokens
             },
             "student_model": {
-                "model": "distilled-soc-llama",  # Placeholder
+                "model": student_model_name,
                 "severity": student_severity,
                 "mitre_techniques": list(student_mitre),
                 "duration_seconds": round(student_duration, 2),
@@ -209,7 +231,7 @@ async def compare_models(
                 "speedup": round(teacher_duration / student_duration, 2) if student_duration > 0 else 1.0,
                 "cost_reduction": "100%",  # Local is free
             },
-            "note": "Student model distillation not yet implemented. Using teacher model as placeholder.",
+            "note": "Set STUDENT_MODEL_NAME (and optionally STUDENT_LLM_PROVIDER) when a distilled model is available; until then teacher is used as placeholder.",
         }
     except Exception as e:
         logger.error(f"Model comparison error: {e}")

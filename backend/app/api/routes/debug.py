@@ -1,18 +1,51 @@
 """Debug endpoints for inspecting agent execution."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
 from app.database.postgres import get_db
 from app.database.redis_client import get_redis_client
 from app.database.repositories import IncidentRepository
+from app.database.models import AgentExecutionLogModel
 from app.models.incident import Incident
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+
+@router.get("/agent-traces")
+async def get_agent_traces(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Get recent agent execution traces across all incidents."""
+    try:
+        result = await db.execute(
+            select(AgentExecutionLogModel)
+            .order_by(desc(AgentExecutionLogModel.timestamp))
+            .limit(limit)
+        )
+        logs = result.scalars().all()
+        return {
+            "traces": [
+                {
+                    "incident_id": log.incident_id,
+                    "agent_name": log.agent_name,
+                    "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+                    "duration_ms": log.duration_ms,
+                    "tools_used": log.tools_used or [],
+                }
+                for log in logs
+            ],
+            "count": len(logs),
+        }
+    except Exception as e:
+        logger.error(f"Failed to get agent traces: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/last-analysis/{incident_id}")

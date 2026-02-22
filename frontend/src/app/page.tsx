@@ -3,10 +3,14 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useSOCMetrics } from '@/hooks/useSOCMetrics';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { AlertTriangle, Activity, Shield, BarChart3 } from 'lucide-react';
+import { AlertTriangle, Activity, Shield, BarChart3, Upload, Play, Heart } from 'lucide-react';
+import { SOCMetricsDashboard } from '@/components/SOCMetricsDashboard';
+import { SeverityChart } from '@/components/charts';
 
 export default function DashboardPage() {
   const [currentTime, setCurrentTime] = useState<string>('');
@@ -25,7 +29,6 @@ export default function DashboardPage() {
     queryFn: () => api.dashboard.stats(),
     refetchInterval: 30000,
     retry: 1,
-    // Don't block initial render - show UI immediately
     placeholderData: {
       total_incidents: 0,
       recent_24h: 0,
@@ -35,6 +38,8 @@ export default function DashboardPage() {
       top_mitre_techniques: [],
     },
   });
+
+  const { data: socMetrics } = useSOCMetrics(24);
 
   return (
     <div className="min-h-screen bg-gray-950 p-8">
@@ -54,6 +59,10 @@ export default function DashboardPage() {
             </p>
           </div>
         )}
+
+        <div className="mb-8">
+          <SOCMetricsDashboard hours={24} />
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <Card className="bg-gray-900 border-gray-800">
@@ -119,29 +128,56 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
           <Card className="bg-gray-900 border-gray-800">
             <CardHeader>
               <CardTitle className="text-white">Quick Actions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <Link href="/ingest">
-                <div className="p-4 bg-gray-800 rounded-lg hover:bg-gray-700 transition cursor-pointer">
-                  <h3 className="font-semibold text-white mb-1">Upload Logs</h3>
-                  <p className="text-sm text-gray-400">Analyze security logs or use Demo Mode</p>
-                </div>
+                <Button variant="outline" className="w-full justify-start">
+                  <Upload className="h-4 w-4 mr-2" />
+                  <div className="text-left">
+                    <div className="font-semibold">Upload Logs</div>
+                    <div className="text-xs text-gray-400">Analyze security logs</div>
+                  </div>
+                </Button>
+              </Link>
+              <Link href="/ingest?tab=demo">
+                <Button variant="outline" className="w-full justify-start">
+                  <Play className="h-4 w-4 mr-2" />
+                  <div className="text-left">
+                    <div className="font-semibold">Demo Mode</div>
+                    <div className="text-xs text-gray-400">Test with sample scenarios</div>
+                  </div>
+                </Button>
               </Link>
               <Link href="/incidents">
-                <div className="p-4 bg-gray-800 rounded-lg hover:bg-gray-700 transition cursor-pointer">
-                  <h3 className="font-semibold text-white mb-1">View Incidents</h3>
-                  <p className="text-sm text-gray-400">Browse all security incidents</p>
-                </div>
+                <Button variant="outline" className="w-full justify-start">
+                  <Activity className="h-4 w-4 mr-2" />
+                  <div className="text-left">
+                    <div className="font-semibold">View Incidents</div>
+                    <div className="text-xs text-gray-400">Browse all incidents</div>
+                  </div>
+                </Button>
               </Link>
               <Link href="/insights">
-                <div className="p-4 bg-gray-800 rounded-lg hover:bg-gray-700 transition cursor-pointer">
-                  <h3 className="font-semibold text-white mb-1">View Insights</h3>
-                  <p className="text-sm text-gray-400">Analytics and metrics</p>
-                </div>
+                <Button variant="outline" className="w-full justify-start">
+                  <BarChart3 className="h-4 w-4 mr-2" />
+                  <div className="text-left">
+                    <div className="font-semibold">View Insights</div>
+                    <div className="text-xs text-gray-400">Analytics and metrics</div>
+                  </div>
+                </Button>
+              </Link>
+              <Link href="/health">
+                <Button variant="outline" className="w-full justify-start">
+                  <Heart className="h-4 w-4 mr-2" />
+                  <div className="text-left">
+                    <div className="font-semibold">System Health</div>
+                    <div className="text-xs text-gray-400">Service status</div>
+                  </div>
+                </Button>
               </Link>
             </CardContent>
           </Card>
@@ -169,6 +205,22 @@ export default function DashboardPage() {
               </div>
             </CardContent>
           </Card>
+
+          {stats?.severity_counts && (
+            <Card className="bg-gray-900 border-gray-800">
+              <CardHeader>
+                <CardTitle className="text-white">Severity Distribution</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <SeverityChart data={[
+                  { name: 'Critical', value: stats.severity_counts.critical || 0 },
+                  { name: 'High', value: stats.severity_counts.high || 0 },
+                  { name: 'Medium', value: stats.severity_counts.medium || 0 },
+                  { name: 'Low', value: stats.severity_counts.low || 0 },
+                ].filter(d => d.value > 0)} />
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <Card className="bg-gray-900 border-gray-800">

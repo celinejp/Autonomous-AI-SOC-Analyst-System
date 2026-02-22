@@ -31,10 +31,14 @@ class IncidentService:
         logs = state.get("logs", [])
         agent_execution_log = state.get("agent_execution_log", [])
 
-        # Determine severity
+        # Normalize alerts to support both dict and model (e.g. from serialized stream state)
+        def _severity(a):
+            s = getattr(a, "severity", None) or (a.get("severity") if isinstance(a, dict) else None)
+            return s if isinstance(s, Severity) else Severity(s) if s else Severity.LOW
         max_severity = Severity.LOW
         if alerts:
-            max_severity = max((a.severity for a in alerts), key=lambda s: list(Severity).index(s))
+            severities = [_severity(a) for a in alerts]
+            max_severity = max(severities, key=lambda s: list(Severity).index(s))
 
         # Create incident
         incident_data = {
@@ -52,18 +56,38 @@ class IncidentService:
         else:
             incident_model = await IncidentRepository.create(session, incident_data)
 
-        # Save alerts
+        # Save alerts (support dict or model)
+        def _alert_attr(alert, key, default=None):
+            if isinstance(alert, dict):
+                return alert.get(key, default)
+            return getattr(alert, key, default)
         for alert in alerts:
+            ts = _alert_attr(alert, "timestamp")
+            if hasattr(ts, "isoformat"):
+                pass
+            elif isinstance(ts, str):
+                try:
+                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    ts = datetime.utcnow()
+            else:
+                ts = datetime.utcnow()
+            sev = _alert_attr(alert, "severity")
+            if isinstance(sev, str):
+                try:
+                    sev = Severity(sev)
+                except ValueError:
+                    sev = Severity.LOW
             alert_model = AlertModel(
                 incident_id=incident_id,
-                timestamp=alert.timestamp,
-                severity=alert.severity,
-                title=alert.title,
-                description=alert.description,
-                detection_rule=alert.detection_rule,
-                evidence=alert.evidence,
-                related_logs=alert.related_logs,
-                mitre_techniques=alert.mitre_techniques,
+                timestamp=ts,
+                severity=sev,
+                title=_alert_attr(alert, "title", ""),
+                description=_alert_attr(alert, "description", ""),
+                detection_rule=_alert_attr(alert, "detection_rule", ""),
+                evidence=_alert_attr(alert, "evidence") or [],
+                related_logs=_alert_attr(alert, "related_logs") or [],
+                mitre_techniques=_alert_attr(alert, "mitre_techniques") or [],
             )
             session.add(alert_model)
 
@@ -87,29 +111,42 @@ class IncidentService:
                 )
                 session.add(mitre_model)
 
-        # Save report
+        # Save report (support dict or model)
+        def _report_attr(report, key, default=None):
+            if report is None:
+                return default
+            if isinstance(report, dict):
+                return report.get(key, default)
+            return getattr(report, key, default)
         if incident_report:
             report_model = IncidentReportModel(
                 incident_id=incident_id,
-                executive_summary=incident_report.executive_summary,
-                technical_findings=incident_report.technical_findings,
-                timeline=incident_report.timeline,
-                affected_assets=incident_report.affected_assets,
-                root_cause=incident_report.root_cause,
-                impact_assessment=incident_report.impact_assessment,
-                confidence_score=incident_report.confidence_score,
-                reasoning_process=incident_report.reasoning_process,
+                executive_summary=_report_attr(incident_report, "executive_summary") or "",
+                technical_findings=_report_attr(incident_report, "technical_findings") or "",
+                timeline=_report_attr(incident_report, "timeline") or "",
+                affected_assets=_report_attr(incident_report, "affected_assets") or "",
+                root_cause=_report_attr(incident_report, "root_cause") or "",
+                impact_assessment=_report_attr(incident_report, "impact_assessment") or "",
+                confidence_score=float(_report_attr(incident_report, "confidence_score") or 0),
+                reasoning_process=_report_attr(incident_report, "reasoning_process") or "",
             )
             session.add(report_model)
 
-        # Save response plan
+        # Save response plan (support dict or model)
+        def _plan_list(plan, key):
+            if not plan:
+                return []
+            val = plan.get(key, []) if isinstance(plan, dict) else getattr(plan, key, [])
+            if not val:
+                return []
+            return [x.dict() if hasattr(x, "dict") else (x if isinstance(x, dict) else {}) for x in val]
         if response_plan:
             plan_model = ResponsePlanModel(
                 incident_id=incident_id,
-                containment_actions=[a.dict() for a in response_plan.containment_actions],
-                investigation_steps=[a.dict() for a in response_plan.investigation_steps],
-                remediation_actions=[a.dict() for a in response_plan.remediation_actions],
-                long_term_improvements=[a.dict() for a in response_plan.long_term_improvements],
+                containment_actions=_plan_list(response_plan, "containment_actions"),
+                investigation_steps=_plan_list(response_plan, "investigation_steps"),
+                remediation_actions=_plan_list(response_plan, "remediation_actions"),
+                long_term_improvements=_plan_list(response_plan, "long_term_improvements"),
             )
             session.add(plan_model)
 
@@ -136,24 +173,34 @@ class IncidentService:
             )
             session.add(log_model)
 
-        # Save log entries
+        # Save log entries (support dict or model)
+        def _log_attr(log, key, default=None):
+            if isinstance(log, dict):
+                return log.get(key, default)
+            return getattr(log, key, default)
         if logs:
-            log_entries_data = [
-                {
+            log_entries_data = []
+            for log in logs:
+                ls = _log_attr(log, "log_source")
+                if hasattr(ls, "value"):
+                    ls = ls.value
+                elif isinstance(ls, str):
+                    pass
+                else:
+                    ls = "unknown"
+                log_entries_data.append({
                     "incident_id": incident_id,
-                    "timestamp": log.timestamp,
-                    "source_ip": log.source_ip,
-                    "destination_ip": log.destination_ip,
-                    "destination_port": log.destination_port,
-                    "user": log.user,
-                    "action": log.action,
-                    "status": log.status,
-                    "log_source": log.log_source.value,
-                    "raw_log": log.raw_log,
-                    "metadata": log.metadata,
-                }
-                for log in logs
-            ]
+                    "timestamp": _log_attr(log, "timestamp") or datetime.utcnow(),
+                    "source_ip": _log_attr(log, "source_ip"),
+                    "destination_ip": _log_attr(log, "destination_ip"),
+                    "destination_port": _log_attr(log, "destination_port"),
+                    "user": _log_attr(log, "user"),
+                    "action": _log_attr(log, "action"),
+                    "status": _log_attr(log, "status"),
+                    "log_source": ls,
+                    "raw_log": _log_attr(log, "raw_log"),
+                    "metadata": _log_attr(log, "metadata") or {},
+                })
             await LogEntryRepository.create_bulk(session, log_entries_data)
 
         await session.commit()

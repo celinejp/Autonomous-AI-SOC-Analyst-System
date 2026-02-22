@@ -10,11 +10,12 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.postgres import get_db
+from app.database.postgres import get_db, AsyncSessionLocal
 from app.database.redis_client import get_redis_client
 from app.services.incident_service import IncidentService
 from app.orchestrator.langgraph_workflow import run_workflow_with_events
 from app.core.logging import get_logger
+from app.models.incident import IncidentStatus
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -31,12 +32,8 @@ AGENT_DURATIONS = {
 TOTAL_ESTIMATED_SECONDS = sum(AGENT_DURATIONS.values())
 
 
-async def process_logs_background(
-    raw_logs: List[str],
-    incident_id: str,
-    db: AsyncSession
-):
-    """Background task to process logs through workflow."""
+async def process_logs_background(raw_logs: List[str], incident_id: str):
+    """Background task to process logs through workflow. Uses its own DB session."""
     redis = get_redis_client()
     
     try:
@@ -54,38 +51,40 @@ async def process_logs_background(
         
         agents_completed = 0
         total_agents = len(AGENT_DURATIONS)
+        final_state = None
         
-        # Run workflow with progress tracking
-        async for event in run_workflow_with_events(raw_logs, incident_id):
-            event_type = event.get("type")
-            
-            if event_type == "agent_start" and redis:
-                agent = event.get("agent")
-                agents_completed += 1
-                progress = int((agents_completed / total_agents) * 100)
+        # Run workflow with progress tracking (use own DB session for save)
+        async with AsyncSessionLocal() as db:
+            async for event in run_workflow_with_events(raw_logs, incident_id):
+                event_type = event.get("type")
                 
-                redis.hset(status_key, mapping={
-                    "current_agent": agent,
-                    "progress_percent": str(progress),
-                })
-            
-            elif event_type == "complete" and redis:
-                final_state = event["data"]
+                if event_type == "agent_start" and redis:
+                    agent = event.get("agent")
+                    agents_completed += 1
+                    progress = int((agents_completed / total_agents) * 100)
+                    redis.hset(status_key, mapping={
+                        "current_agent": agent,
+                        "progress_percent": str(progress),
+                    })
                 
-                # Save to database
+                elif event_type == "complete":
+                    final_state = event["data"]
+                    if redis:
+                        redis.hset(status_key, mapping={
+                            "status": "completed",
+                            "progress_percent": "100",
+                            "completed_at": datetime.utcnow().isoformat(),
+                        })
+                    break
+            
+            # Save to database using this session
+            if final_state:
                 try:
                     await IncidentService.save_incident_from_state(db, final_state)
-                    redis.hset(status_key, mapping={
-                        "status": "completed",
-                        "progress_percent": "100",
-                        "completed_at": datetime.utcnow().isoformat(),
-                    })
                 except Exception as e:
                     logger.error(f"Failed to save incident: {e}")
-                    redis.hset(status_key, mapping={
-                        "status": "failed",
-                        "error": str(e),
-                    })
+                    if redis:
+                        redis.hset(status_key, mapping={"status": "failed", "error": str(e)})
         
     except Exception as e:
         logger.error(f"Background processing failed: {e}")
@@ -114,13 +113,14 @@ async def upload_logs(
         
         incident_id = str(uuid.uuid4())
         
-        # Create initial incident record with "analyzing" status
+        # Create initial incident record so GET /incidents/:id returns immediately
         try:
             from app.database.repositories import IncidentRepository
+            from app.models.incident import Severity
             incident_data = {
                 "id": incident_id,
-                "status": "analyzing",  # Custom status for in-progress
-                "severity": "low",  # Placeholder
+                "status": IncidentStatus.IN_PROGRESS,
+                "severity": Severity.LOW,
                 "confidence_score": 0.0,
             }
             await IncidentRepository.create(db, incident_data)
@@ -128,12 +128,11 @@ async def upload_logs(
         except Exception as e:
             logger.warning(f"Could not create initial incident record: {e}")
         
-        # Start background processing
+        # Start background processing (task uses its own DB session)
         if background_tasks:
-            background_tasks.add_task(process_logs_background, raw_logs, incident_id, db)
+            background_tasks.add_task(process_logs_background, raw_logs, incident_id)
         else:
-            # Fallback: run in background using asyncio
-            asyncio.create_task(process_logs_background(raw_logs, incident_id, db))
+            asyncio.create_task(process_logs_background(raw_logs, incident_id))
         
         return {
             "incident_id": incident_id,
@@ -160,13 +159,14 @@ async def analyze_logs(
         
         incident_id = str(uuid.uuid4())
         
-        # Create initial incident record
+        # Create initial incident record so GET /incidents/:id returns immediately
         try:
             from app.database.repositories import IncidentRepository
+            from app.models.incident import Severity
             incident_data = {
                 "id": incident_id,
-                "status": "analyzing",
-                "severity": "low",
+                "status": IncidentStatus.IN_PROGRESS,
+                "severity": Severity.LOW,
                 "confidence_score": 0.0,
             }
             await IncidentRepository.create(db, incident_data)
@@ -174,11 +174,11 @@ async def analyze_logs(
         except Exception as e:
             logger.warning(f"Could not create initial incident record: {e}")
         
-        # Start background processing
+        # Start background processing (task uses its own DB session)
         if background_tasks:
-            background_tasks.add_task(process_logs_background, raw_logs, incident_id, db)
+            background_tasks.add_task(process_logs_background, raw_logs, incident_id)
         else:
-            asyncio.create_task(process_logs_background(raw_logs, incident_id, db))
+            asyncio.create_task(process_logs_background(raw_logs, incident_id))
         
         return {
             "incident_id": incident_id,
