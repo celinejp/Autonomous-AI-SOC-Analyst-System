@@ -30,7 +30,7 @@ test_endpoint() {
     fi
     
     http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n -1)
+    body=$(echo "$response" | sed '$d')
     
     if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
         echo "✅ PASS"
@@ -91,6 +91,7 @@ if [ -n "$INCIDENT_ID" ]; then
     echo "Done"
     
     test_endpoint "Get Incident After Analysis" "GET" "/incidents/$INCIDENT_ID"
+    test_endpoint "Debug Last Analysis (by incident)" "GET" "/debug/last-analysis/$INCIDENT_ID"
 fi
 
 echo ""
@@ -138,8 +139,8 @@ fi
 echo ""
 echo "6️⃣  Advanced Features Tests"
 echo "-----------------------------------"
-test_endpoint "Debug Last Analysis" "GET" "/debug/last-analysis"
 test_endpoint "Synthetic Dataset Stats" "GET" "/synthetic/dataset-stats"
+test_endpoint "Synthetic Generate" "POST" "/synthetic/generate" '{"count":2}'
 
 echo ""
 echo "============================================================"

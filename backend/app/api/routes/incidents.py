@@ -10,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Query, Response
 from fastapi.responses import JSONResponse
 
+from sqlalchemy import select
 from app.database.postgres import get_db
 from app.database.repositories import IncidentRepository
 from app.database.redis_client import get_redis_client
+from app.database.models import ResponsePlanModel
 from app.models.incident import Incident, IncidentStatus, Severity
 from app.core.logging import get_logger
 from app.core.cache import cache_response, cache_key
@@ -139,6 +141,70 @@ async def update_incident(
     return await IncidentRepository.model_to_pydantic(incident_model)
 
 
+def _find_and_update_action_status(actions_list: list, action_id: str, status: str) -> bool:
+    """Find action by id in a list of dicts and update status. Returns True if found."""
+    for a in actions_list:
+        if isinstance(a, dict) and a.get("id") == action_id:
+            a["status"] = status
+            return True
+    return False
+
+
+@router.patch("/{incident_id}/response-plan/actions/{action_id}")
+async def update_response_plan_action_status(
+    incident_id: str,
+    action_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a single response plan action's status (e.g. pending -> in_progress -> completed)."""
+    status = body.get("status")
+    if not status or status not in ("pending", "in_progress", "completed", "cancelled"):
+        raise HTTPException(
+            status_code=400,
+            detail="status must be one of: pending, in_progress, completed, cancelled",
+        )
+    plan_model = await db.execute(
+        select(ResponsePlanModel).where(ResponsePlanModel.incident_id == incident_id)
+    )
+    plan = plan_model.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Response plan not found")
+    for attr in ("containment_actions", "investigation_steps", "remediation_actions", "long_term_improvements"):
+        lst = list(getattr(plan, attr) or [])
+        if _find_and_update_action_status(lst, action_id, status):
+            setattr(plan, attr, lst)
+            await db.commit()
+            await db.refresh(plan)
+            return {"ok": True, "action_id": action_id, "status": status}
+    raise HTTPException(status_code=404, detail="Action not found in response plan")
+
+
+@router.put("/{incident_id}/status", response_model=Incident)
+async def update_incident_status(
+    incident_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update only the status of an incident (e.g. contained, closed)."""
+    status_value = body.get("status")
+    if not status_value:
+        raise HTTPException(status_code=400, detail="status is required")
+    try:
+        status_enum = IncidentStatus(status_value)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {[s.value for s in IncidentStatus]}",
+        )
+    incident_model = await IncidentRepository.get_by_id(db, incident_id)
+    if not incident_model:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    incident_data = {"status": status_enum}
+    updated = await IncidentRepository.update(db, incident_id, incident_data)
+    return await IncidentRepository.model_to_pydantic(updated)
+
+
 @router.delete("/{incident_id}")
 async def delete_incident(
     incident_id: str,
@@ -213,7 +279,7 @@ async def get_incident_status(
         incident_model = await IncidentRepository.get_by_id(db, incident_id)
         if incident_model:
             status = str(incident_model.status).lower()
-            if status in ["new", "analyzing"]:
+            if status in ["new", "analyzing", "in_progress"]:
                 return IncidentStatusResponse(
                     status="analyzing",
                     progress_percent=50,  # Unknown progress

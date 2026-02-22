@@ -65,6 +65,23 @@ async def get_dashboard_stats(
         """)
         confidence_result = await db.execute(confidence_query)
         avg_confidence = float(confidence_result.scalar() or 0)
+
+        # Top MITRE techniques (from mitre_techniques table)
+        try:
+            top_mitre_query = text("""
+                SELECT technique_id, COUNT(*) as count
+                FROM mitre_techniques
+                GROUP BY technique_id
+                ORDER BY count DESC
+                LIMIT 10
+            """)
+            top_mitre_result = await db.execute(top_mitre_query)
+            top_mitre_techniques = [
+                {"technique_id": row.technique_id, "count": row.count}
+                for row in top_mitre_result
+            ]
+        except Exception:
+            top_mitre_techniques = []
         
         return {
             "total_incidents": total_incidents,
@@ -79,6 +96,7 @@ async def get_dashboard_stats(
                 status: count for status, count in status_counts.items()
             },
             "avg_confidence": round(avg_confidence, 2),
+            "top_mitre_techniques": top_mitre_techniques,
             "cached_at": datetime.utcnow().isoformat(),
         }
     except Exception as e:
