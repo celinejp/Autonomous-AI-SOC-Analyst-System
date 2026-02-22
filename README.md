@@ -134,8 +134,11 @@ This system autonomously analyzes security logs, detects threats, enriches findi
    
    **Option 2: Using Docker Compose**
    ```bash
-   docker-compose up -d
-   docker-compose exec backend python scripts/init_db.py
+   docker-compose up -d postgres redis qdrant backend
+   # Wait for backend to be healthy, then init DB:
+   docker-compose exec -T backend sh -c "PYTHONPATH=/app python scripts/init_db.py"
+   # Run pgvector migration if needed (for semantic search):
+   docker-compose exec -T postgres psql -U soc_user -d soc_db -f - < backend/scripts/migrations/001_add_pgvector.sql
    ```
    
    This starts:
@@ -207,9 +210,18 @@ Navigate to `/incidents` to see all incidents, or click on a specific incident t
 - Agent reasoning chain
 - MITRE ATT&CK technique mappings (24 techniques covered)
 - Evidence and timeline
-- Actionable response plan with team assignments
+- Actionable response plan with team assignments (update action status)
+- Response actions: Block IP, Disable account, execution log
 
-### 4. View Insights & Metrics
+### 4. Search, Integrations, Health & Debug
+
+- **Search** (`/search`): Semantic incident search and MITRE ATT&CK technique search.
+- **Integrations** (`/integrations`): SIEM ingest (Splunk/ELK) and export.
+- **Health** (`/health`): Basic and deep health checks (API, DB, Redis, Qdrant, agents).
+- **Settings** (`/settings`): Organization profile (industry, regulations, crown jewels).
+- **Debug** (`/debug`): Last analysis by incident, agent traces, validation metrics, performance.
+
+### 5. View Insights & Metrics
 
 Navigate to `/insights` for:
 - Severity distribution charts
@@ -234,9 +246,16 @@ Navigate to `/insights` for:
 - `GET /api/organization/profile` - Organization profile
 
 ### Advanced Endpoints
-- `GET /api/incidents/{id}/stream` - Stream agent execution (SSE)
-- `POST /api/synthetic/generate-single` - Generate synthetic training data
-- `GET /api/debug/last-analysis` - Debug agent execution
+- `POST /api/v1/incidents/stream` - Demo mode: stream agent execution (SSE)
+- `POST /api/synthetic/generate` - Generate synthetic logs
+- `GET /api/debug/last-analysis/{incident_id}` - Debug agent execution for an incident
+- `GET /api/debug/agent-traces` - Recent agent traces
+- `POST /api/v1/incidents/search/semantic` - Semantic incident search
+- `GET /api/v1/mitre/search` - MITRE technique search
+- `POST /api/siem/splunk/ingest`, `POST /api/siem/elk/ingest` - SIEM ingest
+- `GET /api/response/execution-log` - Response action execution log
+- `GET /api/v1/performance/metrics` - Performance/Redis metrics
+- `GET /api/v1/validate/aggregate` - Validation aggregate
 
 Full API docs available at `/docs` when running.
 
@@ -314,11 +333,15 @@ curl -X POST http://localhost:8000/api/health/test-workflow \
 ### Automated Test Suite
 
 ```bash
-# Run all integration tests
+# E2E tests (backend must be running at http://localhost:8000)
+./test_all_features.sh
+
+# Or run the Python test script
+cd backend && PYTHONPATH=. python scripts/test_all_features.py
+
+# Pytest integration tests
 cd backend
 pytest tests/test_system_health.py -v -m integration
-
-# Run with timeout protection
 pytest tests/test_system_health.py --timeout=120 -v
 ```
 
@@ -339,7 +362,7 @@ Autonomous-AI-SOC-Analyst-System/
 │   │   ├── agents/          # 6 AI agents
 │   │   ├── tools/           # LangChain tools (IP lookup, MITRE, file/domain intel)
 │   │   ├── orchestrator/    # LangGraph workflow
-│   │   ├── api/routes/      # FastAPI endpoints (14 route modules)
+│   │   ├── api/routes/      # FastAPI endpoints (health, incidents, ingest, stream, dashboard, metrics, organization, debug, synthetic, SIEM, response, semantic search, validation, performance)
 │   │   ├── models/          # Pydantic models (incident, log_entry, organization, etc.)
 │   │   ├── database/        # DB connections & models
 │   │   ├── detection/       # ATT&CK-native detection rules (24 techniques)
@@ -349,13 +372,16 @@ Autonomous-AI-SOC-Analyst-System/
 │   └── tests/               # Test suite with fixtures
 ├── frontend/
 │   └── src/
-│       ├── app/             # Next.js pages (dashboard, incidents, ingest, insights)
-│       ├── components/      # UI components (charts, visualizations, Demo Mode)
+│       ├── app/             # Next.js pages (dashboard, ingest, incidents, incident/[id], search, integrations, insights, health, settings, debug)
+│       ├── components/     # UI components (charts, DemoStreamViewer, ResponsePlanViewer, Navigation, etc.)
 │       ├── lib/             # API client, utilities
 │       └── types/           # TypeScript definitions
 ├── docker-compose.yml
 ├── start.sh                 # Start all services script
 ├── stop.sh                  # Stop all services script
+├── test_all_features.sh     # E2E API test script
+├── IMPLEMENTATION_STATUS.md # Implementation and API ↔ UI reference
+├── STACK_AND_IMPLEMENTATION.md # Stack, connectivity, and what's wired
 └── README.md
 ```
 
