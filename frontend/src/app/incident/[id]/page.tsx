@@ -73,7 +73,7 @@ export default function IncidentDetailPage() {
     }
   };
 
-  const isAnalyzing = incident?.status === IncidentStatus.IN_PROGRESS || incident?.status === 'analyzing';
+  const isAnalyzing = incident?.status === IncidentStatus.IN_PROGRESS;
   
   // Show "Creating incident..." when we get 404 (incident not in DB yet) or while retrying
   const isNotFound = isError && (

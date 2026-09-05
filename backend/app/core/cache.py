@@ -1,16 +1,23 @@
 """Redis caching utilities for FastAPI endpoints."""
 
 from functools import wraps
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, List
 import json
 import hashlib
-from datetime import timedelta
 
 from fastapi import Request
-from app.database.redis_client import get_redis_client
+from app.database.redis_client import get_redis_client, invalidate_pattern
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Prefixes used by @cache_response — bust these on incident mutations
+INCIDENT_CACHE_PATTERNS: List[str] = [
+    "incidents:list*",
+    "incidents:detail*",
+    "dashboard:stats*",
+    "dashboard:timeline*",
+]
 
 
 def cache_response(
@@ -19,99 +26,93 @@ def cache_response(
     include_query: bool = True,
     include_path: bool = True,
 ):
-    """
-    Decorator to cache FastAPI endpoint responses.
-    
-    Args:
-        ttl: Time to live in seconds
-        key_prefix: Prefix for cache key
-        include_query: Include query parameters in cache key
-        include_path: Include path parameters in cache key
-    """
+    """Decorator to cache FastAPI endpoint responses (cache-aside)."""
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Extract request from kwargs if present
             request: Optional[Request] = kwargs.get("request") or (
-                args[0] if args and hasattr(args[0], "__class__") else None
+                args[0] if args and hasattr(args[0], "url") else None
             )
-            
-            # Build cache key
+
             cache_key_parts = [key_prefix]
-            
+
             if include_path and request:
                 cache_key_parts.append(request.url.path)
-            
+
             if include_query and request:
                 query_params = dict(request.query_params)
                 if query_params:
-                    # Sort params for consistent keys
                     sorted_params = sorted(query_params.items())
                     param_str = "&".join(f"{k}={v}" for k, v in sorted_params)
                     cache_key_parts.append(param_str)
-            
-            # Include function arguments in key
+
             if args or kwargs:
                 arg_hash = hashlib.md5(
                     json.dumps(
                         {str(k): str(v) for k, v in kwargs.items()},
                         sort_keys=True,
-                        default=str
+                        default=str,
                     ).encode()
                 ).hexdigest()[:8]
                 cache_key_parts.append(arg_hash)
-            
+
             cache_key = ":".join(cache_key_parts)
-            
-            # Try to get from cache
+
             redis = get_redis_client()
-            if redis:
-                try:
-                    cached = await redis.get(cache_key)
-                    if cached:
-                        logger.debug(f"Cache hit: {cache_key}")
-                        return json.loads(cached)
-                except Exception as e:
-                    logger.warning(f"Cache read error: {e}")
-            
-            # Execute function
+            try:
+                cached = await redis.get(cache_key)
+                if cached:
+                    logger.debug(f"Cache hit: {cache_key}")
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Cache read error: {e}")
+
             result = await func(*args, **kwargs)
-            
-            # Store in cache
-            if redis:
-                try:
-                    # Serialize Pydantic models to dict if needed
-                    if hasattr(result, '__dict__') or hasattr(result, 'model_dump'):
-                        serializable_result = result.model_dump() if hasattr(result, 'model_dump') else [item.model_dump() if hasattr(item, 'model_dump') else item for item in result] if isinstance(result, list) else result
-                    else:
-                        serializable_result = result
-                    
-                    await redis.setex(
-                        cache_key,
-                        ttl,
-                        json.dumps(serializable_result, default=str)
-                    )
-                    logger.debug(f"Cache set: {cache_key} (TTL: {ttl}s)")
-                except Exception as e:
-                    logger.warning(f"Cache write error: {e}")
-            
+
+            try:
+                if hasattr(result, "model_dump"):
+                    serializable_result = result.model_dump()
+                elif isinstance(result, list):
+                    serializable_result = [
+                        item.model_dump() if hasattr(item, "model_dump") else item
+                        for item in result
+                    ]
+                else:
+                    serializable_result = result
+
+                await redis.setex(
+                    cache_key,
+                    ttl,
+                    json.dumps(serializable_result, default=str),
+                )
+                logger.debug(f"Cache set: {cache_key} (TTL: {ttl}s)")
+            except Exception as e:
+                logger.warning(f"Cache write error: {e}")
+
             return result
-        
+
         return wrapper
+
     return decorator
 
 
-def invalidate_cache(pattern: str):
-    """Invalidate all cache keys matching pattern."""
-    redis = get_redis_client()
-    if redis:
-        try:
-            keys = redis.keys(pattern)
-            if keys:
-                redis.delete(*keys)
-                logger.info(f"Invalidated {len(keys)} cache keys: {pattern}")
-        except Exception as e:
-            logger.warning(f"Cache invalidation error: {e}")
+async def invalidate_cache(pattern: str) -> int:
+    """Invalidate cache keys matching pattern via SCAN (non-blocking)."""
+    try:
+        count = await invalidate_pattern(pattern)
+        if count:
+            logger.info(f"Invalidated {count} cache keys: {pattern}")
+        return count
+    except Exception as e:
+        logger.warning(f"Cache invalidation error: {e}")
+        return 0
+
+
+async def invalidate_incident_caches() -> None:
+    """Bust list/detail/dashboard caches after incident writes."""
+    for pattern in INCIDENT_CACHE_PATTERNS:
+        await invalidate_cache(pattern)
 
 
 def cache_key(*parts: str) -> str:
@@ -119,37 +120,37 @@ def cache_key(*parts: str) -> str:
     return ":".join(str(p) for p in parts)
 
 
-def get_or_set(
+async def get_or_set(
     key: str,
-    fetch_func: Callable[[], Any],
+    fetch_func: Callable,
     ttl: int = 60,
     default: Any = None,
 ) -> Any:
-    """Get value from cache or fetch and cache it."""
+    """Async get-or-set cache helper."""
     redis = get_redis_client()
-    
-    # Try cache
-    if redis:
-        try:
-            cached = redis.get(key)
-            if cached:
-                return json.loads(cached)
-        except Exception:
-            pass
-    
-    # Fetch
     try:
-        value = fetch_func()
+        cached = await redis.get(key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    try:
+        value = await fetch_func() if asyncio_iscoroutinefunction(fetch_func) else fetch_func()
         if value is not None:
-            # Cache it
-            if redis:
-                try:
-                    redis.setex(key, ttl, json.dumps(value, default=str))
-                except Exception:
-                    pass
+            try:
+                await redis.setex(key, ttl, json.dumps(value, default=str))
+            except Exception:
+                pass
             return value
     except Exception as e:
         logger.error(f"Fetch function error: {e}")
-    
+
     return default
 
+
+def asyncio_iscoroutinefunction(func: Callable) -> bool:
+    import asyncio
+    import inspect
+
+    return asyncio.iscoroutinefunction(func) or inspect.iscoroutinefunction(func)

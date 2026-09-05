@@ -51,6 +51,7 @@ Be thorough but fair. Flag issues that need correction, but don't be overly crit
 
 async def critic_agent(state: AgentState) -> AgentState:
     """Review incident analysis and provide critique."""
+    _started_at = datetime.utcnow()
     incident_report = state.get("incident_report")
     alerts = state.get("alerts", [])
     logs = state.get("logs", [])
@@ -127,10 +128,14 @@ LOG SOURCES: {', '.join(set(log.log_source.value for log in logs[:10]))}
     state["agent_execution_log"].append({
         "agent_name": "critic",
         "timestamp": datetime.utcnow().isoformat(),
-        "confidence_score": critique_result["confidence"],
-        "needs_revision": needs_revision,
-        "false_positive_likelihood": critique_result["false_positive_likelihood"],
-        "iteration": state["iteration"],
+        "duration_ms": (datetime.utcnow() - _started_at).total_seconds() * 1000,
+        "reasoning": critique_result.get("feedback"),
+        "output_data": {
+            "confidence_score": critique_result["confidence"],
+            "needs_revision": needs_revision,
+            "false_positive_likelihood": critique_result["false_positive_likelihood"],
+            "iteration": state["iteration"],
+        },
     })
 
     return state

@@ -1,26 +1,20 @@
-"""Log ingestion endpoints with background processing."""
+"""Log ingestion endpoints — enqueue analysis jobs onto Redis Streams."""
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from typing import List
-import json
-import asyncio
-from datetime import datetime
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.postgres import get_db, AsyncSessionLocal
-from app.database.redis_client import get_redis_client
-from app.services.incident_service import IncidentService
-from app.orchestrator.langgraph_workflow import run_workflow_with_events
+from app.database.postgres import get_db
+from app.core.job_queue import enqueue_analysis_job
 from app.core.logging import get_logger
-from app.models.incident import IncidentStatus
+from app.models.incident import IncidentStatus, Severity
 
 logger = get_logger(__name__)
 router = APIRouter()
 
-# Agent order and estimated durations (seconds)
+# Keep for status ETA estimates (worker also uses these)
 AGENT_DURATIONS = {
     "ingest": 2,
     "detect": 8,
@@ -32,115 +26,50 @@ AGENT_DURATIONS = {
 TOTAL_ESTIMATED_SECONDS = sum(AGENT_DURATIONS.values())
 
 
-async def process_logs_background(raw_logs: List[str], incident_id: str):
-    """Background task to process logs through workflow. Uses its own DB session."""
-    redis = get_redis_client()
-    
+async def _create_and_enqueue(db: AsyncSession, raw_logs: List[str]) -> dict:
+    incident_id = str(uuid.uuid4())
     try:
-        # Initialize status
-        if redis:
-            status_key = f"incident_status:{incident_id}"
-            redis.hset(status_key, mapping={
-                "status": "analyzing",
-                "progress_percent": "0",
-                "current_agent": "ingest",
-                "started_at": datetime.utcnow().isoformat(),
-                "estimated_duration": str(TOTAL_ESTIMATED_SECONDS),
-            })
-            redis.expire(status_key, 3600)  # 1 hour TTL
-        
-        agents_completed = 0
-        total_agents = len(AGENT_DURATIONS)
-        final_state = None
-        
-        # Run workflow with progress tracking (use own DB session for save)
-        async with AsyncSessionLocal() as db:
-            async for event in run_workflow_with_events(raw_logs, incident_id):
-                event_type = event.get("type")
-                
-                if event_type == "agent_start" and redis:
-                    agent = event.get("agent")
-                    agents_completed += 1
-                    progress = int((agents_completed / total_agents) * 100)
-                    redis.hset(status_key, mapping={
-                        "current_agent": agent,
-                        "progress_percent": str(progress),
-                    })
-                
-                elif event_type == "complete":
-                    final_state = event["data"]
-                    if redis:
-                        redis.hset(status_key, mapping={
-                            "status": "completed",
-                            "progress_percent": "100",
-                            "completed_at": datetime.utcnow().isoformat(),
-                        })
-                    break
-            
-            # Save to database using this session
-            if final_state:
-                try:
-                    await IncidentService.save_incident_from_state(db, final_state)
-                except Exception as e:
-                    logger.error(f"Failed to save incident: {e}")
-                    if redis:
-                        redis.hset(status_key, mapping={"status": "failed", "error": str(e)})
-        
+        from app.database.repositories import IncidentRepository
+
+        await IncidentRepository.create(
+            db,
+            {
+                "id": incident_id,
+                "status": IncidentStatus.IN_PROGRESS,
+                "severity": Severity.LOW,
+                "confidence_score": 0.0,
+            },
+        )
+        await db.commit()
     except Exception as e:
-        logger.error(f"Background processing failed: {e}")
-        if redis:
-            status_key = f"incident_status:{incident_id}"
-            redis.hset(status_key, mapping={
-                "status": "failed",
-                "error": str(e),
-            })
+        logger.warning(f"Could not create initial incident record: {e}")
+
+    await enqueue_analysis_job(incident_id, raw_logs)
+
+    return {
+        "incident_id": incident_id,
+        "status": "queued",
+        "estimated_duration_seconds": TOTAL_ESTIMATED_SECONDS,
+        "message": "Analysis queued on Redis Streams worker.",
+        "logs_processed": len(raw_logs),
+    }
 
 
 @router.post("/upload")
 async def upload_logs(
     file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload and process log file - returns immediately with status."""
+    """Upload and enqueue log file for worker processing."""
     try:
         content = await file.read()
         raw_logs = content.decode("utf-8").strip().split("\n")
         raw_logs = [line for line in raw_logs if line.strip()]
-        
         if not raw_logs:
             raise HTTPException(status_code=400, detail="No log entries found")
-        
-        incident_id = str(uuid.uuid4())
-        
-        # Create initial incident record so GET /incidents/:id returns immediately
-        try:
-            from app.database.repositories import IncidentRepository
-            from app.models.incident import Severity
-            incident_data = {
-                "id": incident_id,
-                "status": IncidentStatus.IN_PROGRESS,
-                "severity": Severity.LOW,
-                "confidence_score": 0.0,
-            }
-            await IncidentRepository.create(db, incident_data)
-            await db.commit()
-        except Exception as e:
-            logger.warning(f"Could not create initial incident record: {e}")
-        
-        # Start background processing (task uses its own DB session)
-        if background_tasks:
-            background_tasks.add_task(process_logs_background, raw_logs, incident_id)
-        else:
-            asyncio.create_task(process_logs_background(raw_logs, incident_id))
-        
-        return {
-            "incident_id": incident_id,
-            "status": "analyzing",
-            "estimated_duration_seconds": TOTAL_ESTIMATED_SECONDS,
-            "message": "Analysis started. You'll be redirected when complete.",
-            "logs_processed": len(raw_logs),
-        }
+        return await _create_and_enqueue(db, raw_logs)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Upload error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -149,44 +78,15 @@ async def upload_logs(
 @router.post("/analyze")
 async def analyze_logs(
     raw_logs: List[str],
-    background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Analyze logs provided as JSON array - returns immediately with status."""
+    """Enqueue logs for analysis via Redis Streams worker."""
     try:
-        if not raw_logs or len(raw_logs) == 0:
+        if not raw_logs:
             raise HTTPException(status_code=400, detail="No log entries provided")
-        
-        incident_id = str(uuid.uuid4())
-        
-        # Create initial incident record so GET /incidents/:id returns immediately
-        try:
-            from app.database.repositories import IncidentRepository
-            from app.models.incident import Severity
-            incident_data = {
-                "id": incident_id,
-                "status": IncidentStatus.IN_PROGRESS,
-                "severity": Severity.LOW,
-                "confidence_score": 0.0,
-            }
-            await IncidentRepository.create(db, incident_data)
-            await db.commit()
-        except Exception as e:
-            logger.warning(f"Could not create initial incident record: {e}")
-        
-        # Start background processing (task uses its own DB session)
-        if background_tasks:
-            background_tasks.add_task(process_logs_background, raw_logs, incident_id)
-        else:
-            asyncio.create_task(process_logs_background(raw_logs, incident_id))
-        
-        return {
-            "incident_id": incident_id,
-            "status": "analyzing",
-            "estimated_duration_seconds": TOTAL_ESTIMATED_SECONDS,
-            "message": "Analysis started. You'll be redirected when complete.",
-            "logs_processed": len(raw_logs),
-        }
+        return await _create_and_enqueue(db, raw_logs)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Analysis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -144,10 +144,12 @@ class IncidentRepository:
                 reasoning_process=incident_model.report.reasoning_process or [],
             ) if incident_model.report else None,
             response_plan=ResponsePlan(
+                incident_id=incident_model.id,
                 containment_actions=incident_model.response_plan.containment_actions or [],
                 investigation_steps=incident_model.response_plan.investigation_steps or [],
                 remediation_actions=incident_model.response_plan.remediation_actions or [],
                 long_term_improvements=incident_model.response_plan.long_term_improvements or [],
+                actions_by_team=incident_model.response_plan.actions_by_team or {},
             ) if incident_model.response_plan else None,
             agent_execution_log=[
                 {

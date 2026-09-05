@@ -30,16 +30,16 @@ async def get_performance_metrics() -> Dict[str, Any]:
         },
     }
     
-    # Get Redis info if available
     if redis:
         try:
-            info = redis.info()
-            metrics["redis"]["memory_used_mb"] = info.get("used_memory", 0) / (1024 * 1024)
-            metrics["redis"]["connected_clients"] = info.get("connected_clients", 0)
-            metrics["redis"]["keyspace"] = redis.dbsize()
+            from app.database.redis_client import redis_info
+            info = await redis_info()
+            metrics["redis"].update(info)
+            metrics["redis"]["connected"] = True
         except Exception as e:
             logger.warning(f"Redis info error: {e}")
-    
+            metrics["redis"]["connected"] = False
+
     return metrics
 
 

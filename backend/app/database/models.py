@@ -121,6 +121,7 @@ class ResponsePlanModel(Base):
     investigation_steps = Column(JSON, default=list)
     remediation_actions = Column(JSON, default=list)
     long_term_improvements = Column(JSON, default=list)
+    actions_by_team = Column(JSON, default=dict)
 
     # Relationships
     incident = relationship("IncidentModel", back_populates="response_plan")

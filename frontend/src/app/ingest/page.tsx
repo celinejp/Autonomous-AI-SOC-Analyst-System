@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { api, demoScenarios } from '@/lib/api';
@@ -24,6 +24,14 @@ const DEMO_SCENARIOS = [
 ] as const;
 
 export default function IngestPage() {
+  return (
+    <Suspense fallback={null}>
+      <IngestPageInner />
+    </Suspense>
+  );
+}
+
+function IngestPageInner() {
   const searchParams = useSearchParams();
   const initialTab = searchParams?.get('tab') === 'demo' ? 'demo' : 'upload';
   const [activeTab, setActiveTab] = useState(initialTab);

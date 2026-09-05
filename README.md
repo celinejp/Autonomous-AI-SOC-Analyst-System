@@ -345,6 +345,36 @@ pytest tests/test_system_health.py -v -m integration
 pytest tests/test_system_health.py --timeout=120 -v
 ```
 
+### Detection Accuracy
+
+Real numbers from `backend/scripts/eval_detection_metrics.py`, run against the live
+Docker stack (ingest → detection → threat intel enrichment) and the 25 labeled
+cases in `backend/data/labeled_incidents.json` + `backend/tests/fixtures/test_logs.json`
+(2026-08-30, `--mode llm --enrich`, full end-to-end pipeline):
+
+| Metric | Value |
+|---|---|
+| Alert-level accuracy / precision / recall / F1 | 1.0 / 1.0 / 1.0 / 1.0 |
+| MITRE technique recall | 0.548 |
+| MITRE technique precision | 0.944 |
+| MITRE technique F1 | 0.693 |
+
+**Caveat on the alert-level numbers:** the labeled fixtures were written to match the
+detection rules' exact keyword expectations, so a perfect 1.0 here is close to
+self-grading rather than proof the system generalizes to real-world log variety - treat
+it as a regression check, not an accuracy claim. The MITRE technique numbers are more
+informative: they were a real bug (raw score reached **0.24 precision** before the fix -
+alerts were tagged with irrelevant techniques like `T1486`/`T1566` off unfiltered
+semantic search and ungrounded LLM tool calls) and the fix (score threshold tuned to
+0.65, plus grounding every tagged technique against an actual similarity hit) nearly
+quadrupled precision while holding recall at the no-enrichment baseline.
+
+Reproduce with:
+```bash
+cd backend
+python scripts/eval_detection_metrics.py --mode llm --enrich
+```
+
 ## Security Considerations
 
 - API keys stored in environment variables
@@ -384,19 +414,3 @@ Autonomous-AI-SOC-Analyst-System/
 ├── STACK_AND_IMPLEMENTATION.md # Stack, connectivity, and what's wired
 └── README.md
 ```
-
-## Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## Acknowledgments
-
-- Anthropic for Claude API
-- LangChain team for LangGraph
-- MITRE for ATT&CK framework
-- shadcn for UI components
-- Ollama for free local LLM

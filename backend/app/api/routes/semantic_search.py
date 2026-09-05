@@ -107,8 +107,8 @@ async def semantic_search_incidents(
         for row in rows:
             results.append(IncidentSearchResult(
                 id=str(row.id),
-                severity=row.severity.value if row.severity else None,
-                status=row.status.value if row.status else None,
+                severity=getattr(row.severity, "value", row.severity) if row.severity else None,
+                status=getattr(row.status, "value", row.status) if row.status else None,
                 confidence_score=row.confidence_score or 0.0,
                 search_text=row.search_text[:200] if row.search_text else None,
                 similarity=round(row.similarity, 4) if row.similarity else 0.0,
@@ -229,8 +229,8 @@ async def generate_incident_embedding(
         
         # Update incident
         update_sql = text("""
-            UPDATE incidents 
-            SET search_text = :search_text, embedding = :embedding::vector
+            UPDATE incidents
+            SET search_text = :search_text, embedding = CAST(:embedding AS vector)
             WHERE id = :incident_id
         """)
         await db.execute(update_sql, {

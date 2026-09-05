@@ -79,11 +79,9 @@ async def check_redis() -> HealthCheckResult:
     try:
         start = time.time()
         redis = get_redis_client()
-        if redis:
-            redis.ping()
-            latency = (time.time() - start) * 1000
-            return HealthCheckResult(status="pass", latency_ms=round(latency, 2))
-        return HealthCheckResult(status="fail", latency_ms=0)
+        await redis.ping()
+        latency = (time.time() - start) * 1000
+        return HealthCheckResult(status="pass", latency_ms=round(latency, 2))
     except Exception as e:
         logger.error(f"Redis check failed: {e}")
         return HealthCheckResult(status="fail", latency_ms=0)

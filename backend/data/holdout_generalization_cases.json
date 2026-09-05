@@ -1,0 +1,139 @@
+{
+  "_description": "Held-out generalization test set. Unlike backend/data/labeled_incidents.json, none of these cases use the 'KEY VALUE' convention (e.g. 'AUTH FAILED user=... src=...') that every labeled_incidents.json fixture shares with the _BENIGN_MARKERS / signature keyword lists in backend/app/agents/detection_agent.py - that overlap made the existing 1.0/1.0/1.0/1.0 eval score close to self-grading. These cases cover the same attack categories in log formats/wording a real environment would actually produce: Windows Security Event text, Sysmon-style process/file events, CEF with non-standard field ordering, a generic email security gateway, a real Zeek/Bro conn.log line, and native JSON Kubernetes audit log entries. Two cases are deliberately ambiguous-benign phrased in unfamiliar wording, to test whether the false-positive suppression generalizes or only recognizes its exact hardcoded markers.",
+  "cases": [
+    {
+      "id": "hold-001",
+      "name": "Brute force - Windows Security Event (4625/4624)",
+      "category": "brute_force",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1110"],
+      "raw_logs": [
+        "Sep 1 09:00:01 DC01 Microsoft-Windows-Security-Auditing: EventID=4625 An account failed to log on. Account Name: jsmith Logon Type: 3 Source Network Address: 198.51.100.23",
+        "Sep 1 09:00:03 DC01 Microsoft-Windows-Security-Auditing: EventID=4625 An account failed to log on. Account Name: jsmith Logon Type: 3 Source Network Address: 198.51.100.23",
+        "Sep 1 09:00:05 DC01 Microsoft-Windows-Security-Auditing: EventID=4625 An account failed to log on. Account Name: jsmith Logon Type: 3 Source Network Address: 198.51.100.23",
+        "Sep 1 09:00:07 DC01 Microsoft-Windows-Security-Auditing: EventID=4625 An account failed to log on. Account Name: jsmith Logon Type: 3 Source Network Address: 198.51.100.23",
+        "Sep 1 09:00:09 DC01 Microsoft-Windows-Security-Auditing: EventID=4625 An account failed to log on. Account Name: jsmith Logon Type: 3 Source Network Address: 198.51.100.23",
+        "Sep 1 09:00:11 DC01 Microsoft-Windows-Security-Auditing: EventID=4624 An account was successfully logged on. Account Name: jsmith Logon Type: 3 Source Network Address: 198.51.100.23"
+      ]
+    },
+    {
+      "id": "hold-002",
+      "name": "Ransomware - Sysmon-style file/process events, unfamiliar naming",
+      "category": "ransomware",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1486"],
+      "raw_logs": [
+        "Sysmon EventID=1 ProcessCreate: Image=C:\\Users\\bfrost\\Downloads\\invoice_update.exe ParentImage=C:\\Windows\\explorer.exe User=CORP\\bfrost",
+        "Sysmon EventID=11 FileCreate: TargetFilename=C:\\Users\\bfrost\\Documents\\Q3_budget.xlsx.locked24 Image=C:\\Users\\bfrost\\Downloads\\invoice_update.exe",
+        "Sysmon EventID=11 FileCreate: TargetFilename=C:\\Users\\bfrost\\Pictures\\family.jpg.locked24 Image=C:\\Users\\bfrost\\Downloads\\invoice_update.exe",
+        "Sysmon EventID=11 FileCreate: TargetFilename=C:\\Users\\bfrost\\Desktop\\HOW_TO_RECOVER_YOUR_FILES.html Image=C:\\Users\\bfrost\\Downloads\\invoice_update.exe",
+        "Sysmon EventID=3 NetworkConnect: Image=C:\\Users\\bfrost\\Downloads\\invoice_update.exe DestinationIp=203.0.113.77 DestinationPort=443"
+      ]
+    },
+    {
+      "id": "hold-003",
+      "name": "Lateral movement - CEF, non-standard/shuffled extension field order",
+      "category": "lateral_movement",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1021"],
+      "raw_logs": [
+        "CEF:0|CorpSec|EDR-Sensor|4.2|4001|Admin Share Access|6|duser=svc_deploy dhost=fileserver02 act=SmbAdminShareConnect share=ADMIN$ src=10.10.4.15 msg=Administrative share accessed from non-standard host",
+        "CEF:0|CorpSec|EDR-Sensor|4.2|4002|Remote Logon|6|dhost=app-srv-07 act=InteractiveLogon logonType=RemoteInteractive duser=svc_deploy src=10.10.4.15 msg=Remote desktop logon",
+        "CEF:0|CorpSec|EDR-Sensor|4.2|4002|Remote Logon|6|dhost=app-srv-11 act=InteractiveLogon logonType=RemoteInteractive src=10.10.4.15 duser=svc_deploy msg=Remote desktop logon",
+        "CEF:0|CorpSec|EDR-Sensor|4.2|4001|Admin Share Access|6|act=SmbAdminShareConnect share=C$ dhost=app-srv-11 src=10.10.4.15 duser=svc_deploy msg=Administrative share accessed from non-standard host"
+      ]
+    },
+    {
+      "id": "hold-004",
+      "name": "Phishing - generic email security gateway wording",
+      "category": "phishing",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1566"],
+      "raw_logs": [
+        "email-gateway01: message-id=<a1b2c3@mail-relay.example> from=billing@invoice-notify-secure.com to=accounts@corp.example subject=\"Overdue Invoice - Action Required\" attachment=Invoice_84512.xlsm attachment_verdict=malicious_macro sandbox_score=97",
+        "email-gateway01: message-id=<a1b2c3@mail-relay.example> delivery_action=quarantine_failed reason=user_preview_before_quarantine",
+        "endpoint-agent: user=accounts opened attachment Invoice_84512.xlsm macro_execution=true child_process=powershell.exe encoded_command=true"
+      ]
+    },
+    {
+      "id": "hold-005",
+      "name": "Credential dumping - Sysmon ProcessAccess into lsass, non-mimikatz tool name",
+      "category": "credential_dumping",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1003"],
+      "raw_logs": [
+        "Sysmon EventID=10 ProcessAccess: SourceImage=C:\\Windows\\Temp\\diagcollector.exe TargetImage=C:\\Windows\\System32\\lsass.exe GrantedAccess=0x1410 CallTrace=unknown",
+        "Sysmon EventID=1 ProcessCreate: Image=C:\\Windows\\Temp\\diagcollector.exe CommandLine=\"diagcollector.exe --dump-target 660 --out C:\\Windows\\Temp\\a1.dmp\" User=CORP\\svc_backup"
+      ]
+    },
+    {
+      "id": "hold-006",
+      "name": "Data exfiltration - real Zeek/Bro conn.log line, no HTTP/exfil keywords",
+      "category": "data_exfiltration",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1048", "T1567"],
+      "raw_logs": [
+        "1725184801.223145\tCXjk814rNCyfnvJyi9\t10.0.2.14\t51422\t203.0.113.201\t8443\ttcp\t-\t612.401\t1310\t2415919104\tSF\t-\t-\t0\tShAdDaFf\t18402\t2650001\t14201\t2415921100\t-",
+        "1725184813.998812\tCXjk814rNCyfnvJyi9b\t10.0.2.14\t51423\t203.0.113.201\t8443\ttcp\t-\t598.117\t1204\t1887436800\tSF\t-\t-\t0\tShAdDaFf\t16233\t2100322\t13990\t1887438004\t-"
+      ]
+    },
+    {
+      "id": "hold-007",
+      "name": "Privilege escalation - native Kubernetes audit log, cluster-admin grant to suspicious SA",
+      "category": "privilege_escalation",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1548"],
+      "raw_logs": [
+        "{\"kind\":\"Event\",\"apiVersion\":\"audit.k8s.io/v1\",\"verb\":\"create\",\"objectRef\":{\"resource\":\"clusterrolebindings\",\"name\":\"anon-full-access\"},\"user\":{\"username\":\"system:serviceaccount:default:build-runner\"},\"responseStatus\":{\"code\":201},\"requestObject\":{\"roleRef\":{\"kind\":\"ClusterRole\",\"name\":\"cluster-admin\"},\"subjects\":[{\"kind\":\"Group\",\"name\":\"system:anonymous\"}]}}",
+        "{\"kind\":\"Event\",\"apiVersion\":\"audit.k8s.io/v1\",\"verb\":\"create\",\"objectRef\":{\"resource\":\"pods\",\"subresource\":\"exec\",\"namespace\":\"kube-system\",\"name\":\"coredns-7d5\"},\"user\":{\"username\":\"system:serviceaccount:default:build-runner\"},\"responseStatus\":{\"code\":200}}"
+      ]
+    },
+    {
+      "id": "hold-008",
+      "name": "DNS tunneling - generic resolver log, high-entropy subdomains, no 'tunnel'/'dga' keywords",
+      "category": "dns_tunneling",
+      "expected_is_true_positive": true,
+      "expected_techniques": ["T1071.004"],
+      "raw_logs": [
+        "resolver-01: query name=q7f2mZk9pXrT4wLc8sVnJhYd2eBaR.datasync-relay.net type=TXT client=10.0.5.22",
+        "resolver-01: query name=x1kLp8QzWvNc3rYt6uJmSdA9fGhB2.datasync-relay.net type=TXT client=10.0.5.22",
+        "resolver-01: query name=m4TgR7hNcVpL2xQsZkYw9uBdFj5eA.datasync-relay.net type=TXT client=10.0.5.22",
+        "resolver-01: query name=b9WxNq3TzYmR8vLkPsJc4dGhF6uAe.datasync-relay.net type=TXT client=10.0.5.22",
+        "resolver-01: query name=k2FvHt7RzXcM5nQwJyLb3sDgA9pTe.datasync-relay.net type=TXT client=10.0.5.22",
+        "resolver-01: query name=r6ZbNp2WxKtL8vQcJmFy4hGsD3uAe.datasync-relay.net type=TXT client=10.0.5.22"
+      ]
+    },
+    {
+      "id": "hold-009",
+      "name": "Ambiguous benign - routine kubectl exec by on-call SRE (k8s audit log)",
+      "category": "benign_ambiguous",
+      "expected_is_true_positive": false,
+      "expected_techniques": [],
+      "raw_logs": [
+        "{\"kind\":\"Event\",\"apiVersion\":\"audit.k8s.io/v1\",\"verb\":\"create\",\"objectRef\":{\"resource\":\"pods\",\"subresource\":\"exec\",\"namespace\":\"payments\",\"name\":\"payments-worker-6f9\"},\"user\":{\"username\":\"oncall-sre-jchen@corp.example\",\"groups\":[\"sre-oncall\"]},\"responseStatus\":{\"code\":200},\"annotations\":{\"authorization.k8s.io/decision\":\"allow\",\"authorization.k8s.io/reason\":\"RBAC: allowed by RoleBinding sre-oncall-debug\"}}"
+      ]
+    },
+    {
+      "id": "hold-010",
+      "name": "Ambiguous benign - authorized vuln-scan port sweep, CEF format without the hardcoded 'approved=true'/'scanner=nessus' markers",
+      "category": "benign_ambiguous",
+      "expected_is_true_positive": false,
+      "expected_techniques": [],
+      "raw_logs": [
+        "CEF:0|SecOps|ChangeControl|1.0|9001|Scheduled Assessment Start|2|src=10.0.0.250 cs1Label=ChangeTicket cs1=CHG-88123 requester=security-ops.assessments msg=Quarterly authorized assessment window opened per CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=21 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=22 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=25 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=53 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=80 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=110 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=143 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=443 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=445 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=3389 cs1=CHG-88123",
+        "CEF:0|Firewall|NGFW|9.1|3001|Port Connect|3|src=10.0.0.250 dst=10.0.1.11 dpt=8080 cs1=CHG-88123",
+        "CEF:0|SecOps|ChangeControl|1.0|9002|Scheduled Assessment Complete|2|src=10.0.0.250 cs1=CHG-88123 msg=Assessment window closed, findings filed to ticketing system"
+      ]
+    }
+  ]
+}

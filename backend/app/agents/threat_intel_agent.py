@@ -9,7 +9,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.agents.base import BaseAgent
 from app.core.config import settings
 from app.models.agent_state import AgentState
-from app.tools.mitre_search import get_mitre_technique, search_mitre_techniques
+from app.tools.mitre_search import (
+    MITRE_SCORE_THRESHOLD,
+    get_mitre_technique,
+    get_mitre_technique_raw,
+    search_mitre_techniques,
+    search_mitre_techniques_raw,
+)
 
 SYSTEM_PROMPT = """You are a threat intelligence agent. Your role is to enrich security alerts with MITRE ATT&CK framework context and threat intelligence.
 
@@ -28,6 +34,7 @@ Output a structured threat intelligence report with MITRE mappings."""
 
 async def threat_intel_agent(state: AgentState) -> AgentState:
     """Enrich alerts with threat intelligence."""
+    _started_at = datetime.utcnow()
     alerts = state.get("alerts", [])
     if not alerts:
         state["threat_intel"] = {}
@@ -41,6 +48,7 @@ async def threat_intel_agent(state: AgentState) -> AgentState:
         "attack_patterns": [],
         "iocs": [],
     }
+    tools_used = set()
 
     # Analyze each alert for MITRE mappings
     for alert in alerts:
@@ -53,37 +61,65 @@ async def threat_intel_agent(state: AgentState) -> AgentState:
         ]
 
         response = await llm.ainvoke(messages)
-        
+
         # Extract tool calls
         tool_calls = []
         if hasattr(response, "tool_calls"):
             tool_calls = response.tool_calls
-        
+
+        # Ground truth for this alert: technique IDs whose embedding similarity to the
+        # alert text actually clears the threshold. get_mitre_technique is a detail-lookup
+        # tool with no similarity score of its own, so the LLM can name any technique ID
+        # it wants there -- only tag the alert with an ID if this grounding search (or an
+        # explicit search_mitre_techniques call below) corroborates it above the threshold.
+        grounded_ids = {
+            str(hit["id"]).upper()
+            for hit in search_mitre_techniques_raw(alert_text)
+            if hit.get("id") and hit.get("score", 0) >= MITRE_SCORE_THRESHOLD
+        }
+
         # Process tool calls and gather MITRE data
         mitre_ids = set()
+        looked_up_ids = set()
         for tool_call in tool_calls:
+            tools_used.add(tool_call["name"])
             if tool_call["name"] == "get_mitre_technique":
                 technique_id = tool_call["args"].get("technique_id", "")
                 if technique_id:
-                    mitre_ids.add(technique_id.upper())
+                    technique_id = technique_id.upper()
+                    looked_up_ids.add(technique_id)
+                    if technique_id in grounded_ids:
+                        mitre_ids.add(technique_id)
             elif tool_call["name"] == "search_mitre_techniques":
                 query = tool_call["args"].get("query", alert_text)
-                # Extract technique IDs from search results
-                search_result = search_mitre_techniques(query)
-                # Parse technique IDs from result
-                import re
-                ids = re.findall(r'T\d{4}(?:\.\d{3})?', search_result)
-                mitre_ids.update(ids)
+                limit = tool_call["args"].get("limit", 5)
+                # Only keep technique IDs whose similarity score actually clears the
+                # threshold, instead of regexing every T-number out of the raw result
+                # string (which also matched IDs mentioned incidentally in descriptions).
+                for hit in search_mitre_techniques_raw(query, limit=limit):
+                    tid = hit.get("id")
+                    score = hit.get("score", 0)
+                    if tid and score >= MITRE_SCORE_THRESHOLD:
+                        tid = str(tid).upper()
+                        looked_up_ids.add(tid)
+                        mitre_ids.add(tid)
 
-        # Also check alert's existing MITRE techniques
+        # Also check alert's existing MITRE techniques (from rule-based detection - trusted)
         mitre_ids.update(alert.mitre_techniques)
+        looked_up_ids.update(alert.mitre_techniques)
 
-        # Get detailed technique info
-        for tech_id in mitre_ids:
-            tech_info = get_mitre_technique(tech_id)
+        # Get detailed technique info for everything looked up, even ids that didn't clear
+        # grounding (useful context for the analyst), but only tagged ids go on the alert.
+        # Use the structured dict (not the LLM-formatted string get_mitre_technique
+        # returns) - incident_service.save_incident_from_state expects "info" to be a
+        # dict with name/tactic/description/detection_methods and silently skips it
+        # otherwise, which meant no MITRETechniqueModel row was ever persisted.
+        for tech_id in looked_up_ids:
+            tech_info = get_mitre_technique_raw(tech_id)
             threat_intel_data["mitre_techniques"].append({
                 "technique_id": tech_id,
                 "info": tech_info,
+                "tagged": tech_id in mitre_ids,
             })
 
         # Update alert with MITRE techniques
@@ -93,8 +129,12 @@ async def threat_intel_agent(state: AgentState) -> AgentState:
     state["agent_execution_log"].append({
         "agent_name": "threat_intel",
         "timestamp": datetime.utcnow().isoformat(),
-        "alerts_enriched": len(alerts),
-        "mitre_techniques_found": len(threat_intel_data["mitre_techniques"]),
+        "duration_ms": (datetime.utcnow() - _started_at).total_seconds() * 1000,
+        "tools_used": sorted(tools_used),
+        "output_data": {
+            "alerts_enriched": len(alerts),
+            "mitre_techniques_found": len(threat_intel_data["mitre_techniques"]),
+        },
     })
 
     return state

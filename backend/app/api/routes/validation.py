@@ -68,7 +68,58 @@ class AggregateResponse(BaseModel):
     avg_f1_score: float
     true_positive_rate: float
     false_positive_rate: float
-    agent_performance: dict
+    agent_performance: dict = {}
+    metrics_source: str = "unevaluated"
+    evaluated_at: Optional[str] = None
+
+
+REAL_METRICS_PATHS = [
+    Path(__file__).parent.parent.parent / "tests" / "results" / "real_accuracy_report_llm.json",
+    Path(__file__).parent.parent.parent / "tests" / "results" / "real_accuracy_report.json",
+]
+
+
+def load_real_eval_metrics() -> Optional[dict]:
+    """Load last measured detection metrics from eval script output (not hardcoded)."""
+    for path in REAL_METRICS_PATHS:
+        try:
+            if not path.exists():
+                continue
+            with open(path) as f:
+                data = json.load(f)
+            # Combined report shape
+            if "datasets" in data and "combined" in data["datasets"]:
+                agg = data["datasets"]["combined"]
+                return {
+                    "total_incidents": agg.get("n", 0),
+                    "avg_accuracy": agg.get("accuracy", 0),
+                    "avg_precision": agg.get("precision", 0),
+                    "avg_recall": agg.get("recall", 0),
+                    "avg_f1_score": agg.get("f1", 0),
+                    "true_positive_rate": agg.get("recall", 0),
+                    "false_positive_rate": agg.get("false_positive_rate", 0),
+                    "metrics_source": f"eval:{path.name}",
+                    "evaluated_at": data.get("generated_at"),
+                    "agent_performance": {},
+                }
+            # Flat aggregate shape from eval_detection_metrics.py
+            if "aggregate" in data:
+                agg = data["aggregate"]
+                return {
+                    "total_incidents": agg.get("n", 0),
+                    "avg_accuracy": agg.get("accuracy", 0),
+                    "avg_precision": agg.get("precision", 0),
+                    "avg_recall": agg.get("recall", 0),
+                    "avg_f1_score": agg.get("f1", 0),
+                    "true_positive_rate": agg.get("detection_rate", agg.get("recall", 0)),
+                    "false_positive_rate": agg.get("false_positive_rate", 0),
+                    "metrics_source": f"eval:{path.name}:mode={data.get('mode', 'unknown')}",
+                    "evaluated_at": data.get("generated_at"),
+                    "agent_performance": {},
+                }
+        except Exception as e:
+            logger.warning(f"Could not load real metrics from {path}: {e}")
+    return None
 
 
 @router.get("/incident/{incident_id}/metrics", response_model=MetricsResponse)
@@ -175,10 +226,12 @@ async def validate_incident(
     validation = validate_against_ground_truth(incident, ground_truth)
     
     # Cache result
-    redis = get_redis_client()
-    if redis:
+    try:
+        redis = get_redis_client()
         cache_key = f"validation:{incident_id}:{ground_truth_id}"
-        redis.setex(cache_key, 3600, validation.model_dump_json())
+        await redis.setex(cache_key, 3600, validation.model_dump_json())
+    except Exception:
+        pass
     
     return ValidationResponse(
         incident_id=incident_id,
@@ -198,79 +251,61 @@ async def get_aggregate_metrics(
     days: int = Query(default=30, ge=1, le=365),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get aggregated system metrics for the specified period."""
-    # Check cache first
+    """Get aggregated detection metrics from the last real eval run (not hardcoded)."""
     redis = get_redis_client()
     cache_key = f"aggregate_metrics:{days}"
-    
-    if redis:
-        try:
-            cached = redis.get(cache_key)
-            if cached:
-                return json.loads(cached)
-        except Exception:
-            pass
-    
-    period_end = datetime.utcnow()
-    period_start = period_end - timedelta(days=days)
-    
-    # Get incidents from period
-    sql = text("""
-        SELECT i.id, i.severity, i.confidence_score, i.created_at
-        FROM incidents i
-        WHERE i.created_at >= :start AND i.created_at <= :end
-    """)
-    result = await db.execute(sql, {"start": period_start, "end": period_end})
-    incidents = result.fetchall()
-    
-    # Return baseline metrics (from ground truth tests) when no real incidents
-    if not incidents:
-        return AggregateResponse(
-            period=f"Last {days} days",
-            total_incidents=20,
-            avg_accuracy=0.88,
-            avg_precision=0.85,
-            avg_recall=0.92,
-            avg_f1_score=0.88,
-            true_positive_rate=0.88,
-            false_positive_rate=0.12,
-            agent_performance={
-                "ingest": 0.95,
-                "detect": 0.88,
-                "enrich": 0.90,
-                "analyze": 0.85,
-                "critique": 0.92,
-                "plan_response": 0.87,
-            }
+
+    try:
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    real = load_real_eval_metrics()
+    if real:
+        response = AggregateResponse(
+            period=f"Last measured eval ({days}d window label)",
+            total_incidents=real["total_incidents"],
+            avg_accuracy=real["avg_accuracy"],
+            avg_precision=real["avg_precision"],
+            avg_recall=real["avg_recall"],
+            avg_f1_score=real["avg_f1_score"],
+            true_positive_rate=real["true_positive_rate"],
+            false_positive_rate=real["false_positive_rate"],
+            agent_performance=real.get("agent_performance") or {},
+            metrics_source=real["metrics_source"],
+            evaluated_at=real.get("evaluated_at"),
         )
-    
-    # Calculate mock aggregate (in production, would use stored validation results)
-    total = len(incidents)
-    high_confidence = sum(1 for i in incidents if (i.confidence_score or 0) > 0.7)
-    
-    response = AggregateResponse(
-        period=f"Last {days} days",
-        total_incidents=total,
-        avg_accuracy=0.88,
-        avg_precision=0.85,
-        avg_recall=0.92,
-        avg_f1_score=0.88,
-        true_positive_rate=high_confidence / total if total > 0 else 0,
-        false_positive_rate=0.12,
-        agent_performance={
-            "ingest": 0.95,
-            "detect": 0.88,
-            "enrich": 0.90,
-            "analyze": 0.85,
-            "critique": 0.92,
-            "plan_response": 0.87,
-        }
-    )
-    
-    # Cache result
-    if redis:
-        redis.setex(cache_key, 300, response.model_dump_json())
-    
+    else:
+        # Honest empty state — never invent vanity metrics
+        sql = text("""
+            SELECT COUNT(*) AS n FROM incidents
+            WHERE created_at >= :start AND created_at <= :end
+        """)
+        period_end = datetime.utcnow()
+        period_start = period_end - timedelta(days=days)
+        result = await db.execute(sql, {"start": period_start, "end": period_end})
+        n = int(result.scalar() or 0)
+        response = AggregateResponse(
+            period=f"Last {days} days",
+            total_incidents=n,
+            avg_accuracy=0.0,
+            avg_precision=0.0,
+            avg_recall=0.0,
+            avg_f1_score=0.0,
+            true_positive_rate=0.0,
+            false_positive_rate=0.0,
+            agent_performance={},
+            metrics_source="unevaluated",
+            evaluated_at=None,
+        )
+
+    try:
+        await redis.setex(cache_key, 300, response.model_dump_json())
+    except Exception:
+        pass
+
     return response
 
 

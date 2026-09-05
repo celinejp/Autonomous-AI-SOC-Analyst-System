@@ -248,8 +248,8 @@ def serialize_state_for_stream(state: Dict[str, Any]) -> Dict[str, Any]:
     
     # Safe keys to include
     safe_keys = [
-        "logs", "alerts", "threat_intel", "confidence", 
-        "iteration", "needs_revision", "incident_id"
+        "logs", "alerts", "threat_intel", "confidence",
+        "iteration", "needs_revision", "incident_id", "agent_execution_log"
     ]
     
     for key in safe_keys:

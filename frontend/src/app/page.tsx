@@ -49,7 +49,7 @@ export default function DashboardPage() {
           <p className="text-gray-400">Multi-agent threat detection and analysis system</p>
         </div>
 
-        {error && (
+        {error && !stats && (
           <div className="mb-6 p-4 bg-red-900/20 border border-red-500/50 rounded-lg">
             <p className="text-red-400 text-sm mb-2">
               ⚠️ {error instanceof Error ? error.message : 'Failed to connect to backend API'}

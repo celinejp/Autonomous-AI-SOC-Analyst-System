@@ -78,6 +78,10 @@ export interface ResponsePlan {
   immediate_actions: ResponseAction[];
   short_term_actions: ResponseAction[];
   long_term_actions: ResponseAction[];
+  containment_actions?: ResponseAction[];
+  investigation_steps?: ResponseAction[];
+  remediation_actions?: ResponseAction[];
+  long_term_improvements?: ResponseAction[];
   actions_by_team: Record<string, ResponseAction[]>;
   stakeholder_notifications?: any[];
   ioc_blocklist_updates?: any;
