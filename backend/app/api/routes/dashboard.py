@@ -32,7 +32,9 @@ async def get_dashboard_stats(
             GROUP BY severity
         """)
         severity_result = await db.execute(severity_query)
-        severity_counts = {row.severity: row.count for row in severity_result}
+        # DB stores the SQLAlchemy Enum member name (e.g. "HIGH"), not the lowercase
+        # Severity value the code below looks up - normalize so the .get() calls hit.
+        severity_counts = {row.severity.lower(): row.count for row in severity_result}
         
         # Get counts by status
         status_query = text("""

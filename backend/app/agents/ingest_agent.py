@@ -26,6 +26,7 @@ Output a JSON array of normalized log entries. Be precise and extract all availa
 
 async def ingest_agent(state: AgentState) -> AgentState:
     """Parse and normalize raw logs."""
+    _started_at = datetime.utcnow()
     raw_logs = state.get("raw_logs", [])
     if not raw_logs:
         state["logs"] = []
@@ -62,8 +63,8 @@ async def ingest_agent(state: AgentState) -> AgentState:
     state["agent_execution_log"].append({
         "agent_name": "ingest",
         "timestamp": datetime.utcnow().isoformat(),
-        "input_count": len(raw_logs),
-        "output_count": len(normalized_logs),
+        "duration_ms": (datetime.utcnow() - _started_at).total_seconds() * 1000,
+        "output_data": {"input_count": len(raw_logs), "output_count": len(normalized_logs)},
     })
     
     return state
@@ -213,44 +214,190 @@ def parse_gcp_audit_log(log_entry: dict) -> LogEntry:
     )
 
 
+_IP_RE = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+
+_CEF_HEADER_RE = re.compile(
+    r'CEF:\d+\|(?P<vendor>[^|]*)\|(?P<product>[^|]*)\|(?P<version>[^|]*)\|'
+    r'(?P<sig_id>[^|]*)\|(?P<name>[^|]*)\|(?P<severity>[^|]*)\|(?P<extension>.*)$'
+)
+_CEF_KV_RE = re.compile(r'(\w+)=([^=]*?)(?=\s+\w+=|$)')
+
+_WINDOWS_MARKER_RE = re.compile(r'Security-Auditing|Event\s?ID[:=]?\s*\d{3,5}', re.IGNORECASE)
+_WINDOWS_EVENT_ID_RE = re.compile(r'Event\s?ID[:=]?\s*(?P<id>\d{3,5})', re.IGNORECASE)
+_WINDOWS_ACCOUNT_RE = re.compile(r'Account Name:\s*(?P<user>[^\s,;]+)', re.IGNORECASE)
+_WINDOWS_SRC_IP_RE = re.compile(r'Source Network Address:\s*(?P<ip>[\d.]+)', re.IGNORECASE)
+
+_SSH_FAILED_RE = re.compile(
+    r'Failed password for (?:invalid user )?(?P<user>\S+) from (?P<ip>[\d.]+)(?: port (?P<port>\d+))?',
+    re.IGNORECASE,
+)
+_SSH_ACCEPTED_RE = re.compile(
+    r'Accepted password for (?P<user>\S+) from (?P<ip>[\d.]+)(?: port (?P<port>\d+))?',
+    re.IGNORECASE,
+)
+_SSH_INVALID_USER_RE = re.compile(r'Invalid user (?P<user>\S+) from (?P<ip>[\d.]+)', re.IGNORECASE)
+
+# Substring (not word-bounded) so compound tokens like "AUTH_FAIL" or "auth_failure" still match.
+_FAILURE_TOKEN_RE = re.compile(r'fail|invalid|denied|incorrect|unsuccessful|reject|error', re.IGNORECASE)
+
+
 def _parse_syslog_log(raw_log: str) -> LogEntry:
-    """Parse syslog format log."""
-    # Simple syslog parser - extract IPs, timestamps, etc.
-    # Format: timestamp hostname program: message
+    """Parse a raw (non-JSON) log line, dispatching to a format-specific structured
+    parser instead of a single flat keyword scan. Real log fleets mix sshd-style
+    syslog, Windows Security Event exports, and CEF-formatted appliance logs, and a
+    keyword scan tuned for one format silently misclassifies the others (e.g. a
+    Windows/CEF "AUTH_FAIL" token doesn't contain the substring "failed")."""
+    if "CEF:" in raw_log:
+        return _parse_cef_log(raw_log)
+    if _WINDOWS_MARKER_RE.search(raw_log):
+        return _parse_windows_event_log(raw_log)
+    return _parse_generic_syslog_log(raw_log)
+
+
+def _parse_generic_syslog_log(raw_log: str) -> LogEntry:
+    """Parse standard syslog-style lines (e.g. sshd auth logs)."""
     timestamp = datetime.utcnow()
-    
-    # Try to extract IP addresses
-    ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    ips = re.findall(ip_pattern, raw_log)
-    source_ip = ips[0] if ips else "unknown"
-    destination_ip = ips[1] if len(ips) > 1 else None
-    
-    # Determine source and action
+
     source = LogSource.SYSTEM
     action = "log_event"
-    
-    if "ssh" in raw_log.lower() or "login" in raw_log.lower():
+    status = "unknown"
+    user = None
+    source_ip = None
+    destination_port = None
+
+    is_auth_line = "sshd" in raw_log.lower() or "ssh" in raw_log.lower() or "login" in raw_log.lower()
+
+    if is_auth_line:
         source = LogSource.AUTH
-        action = "login_attempt"
-        if "failed" in raw_log.lower() or "error" in raw_log.lower():
+        match = _SSH_FAILED_RE.search(raw_log) or _SSH_INVALID_USER_RE.search(raw_log)
+        accepted_match = _SSH_ACCEPTED_RE.search(raw_log)
+        if accepted_match:
+            action = "login_success"
+            status = "success"
+            user = accepted_match.group("user")
+            source_ip = accepted_match.group("ip")
+            port = accepted_match.groupdict().get("port")
+            destination_port = int(port) if port else None
+        elif match:
             action = "login_failed"
+            status = "failure"
+            user = match.group("user")
+            source_ip = match.group("ip")
+            port = match.groupdict().get("port")
+            destination_port = int(port) if port else None
+        else:
+            action = "login_attempt"
+            status = "failure" if _FAILURE_TOKEN_RE.search(raw_log) else "success"
     elif "dns" in raw_log.lower():
         source = LogSource.DNS
         action = "dns_query"
+        status = "failure" if _FAILURE_TOKEN_RE.search(raw_log) else "success"
     elif "http" in raw_log.lower() or "GET" in raw_log or "POST" in raw_log:
         source = LogSource.HTTP
         action = "http_request"
-    
-    # Extract status
-    status = "success"
-    if "failed" in raw_log.lower() or "error" in raw_log.lower() or "denied" in raw_log.lower():
-        status = "failure"
-    
+        status = "failure" if _FAILURE_TOKEN_RE.search(raw_log) else "success"
+    else:
+        status = "failure" if _FAILURE_TOKEN_RE.search(raw_log) else "success"
+
+    if not source_ip:
+        ips = _IP_RE.findall(raw_log)
+        source_ip = ips[0] if ips else "unknown"
+        destination_ip = ips[1] if len(ips) > 1 else None
+    else:
+        ips = _IP_RE.findall(raw_log)
+        destination_ip = next((ip for ip in ips if ip != source_ip), None)
+
     return LogEntry(
         timestamp=timestamp,
         source_ip=source_ip,
         destination_ip=destination_ip,
+        destination_port=destination_port,
+        user=user,
         log_source=source,
+        log_source_type=LogSourceType.SYSLOG,
+        action=action,
+        status=status,
+        raw_log=raw_log,
+    )
+
+
+def _parse_windows_event_log(raw_log: str) -> LogEntry:
+    """Parse a Windows Security Event log line (4624/4625-style auth events)."""
+    timestamp = datetime.utcnow()
+
+    event_id_match = _WINDOWS_EVENT_ID_RE.search(raw_log)
+    event_id = int(event_id_match.group("id")) if event_id_match else None
+
+    lowered = raw_log.lower()
+    if event_id == 4625 or "failed to log on" in lowered:
+        action = "login_failed"
+        status = "failure"
+    elif event_id == 4624 or "successfully logged on" in lowered:
+        action = "login_success"
+        status = "success"
+    else:
+        action = "windows_security_event"
+        status = "failure" if _FAILURE_TOKEN_RE.search(raw_log) else "success"
+
+    user_match = _WINDOWS_ACCOUNT_RE.search(raw_log)
+    user = user_match.group("user") if user_match else None
+
+    ip_match = _WINDOWS_SRC_IP_RE.search(raw_log)
+    if ip_match:
+        source_ip = ip_match.group("ip")
+    else:
+        ips = _IP_RE.findall(raw_log)
+        source_ip = ips[0] if ips else "unknown"
+
+    return LogEntry(
+        timestamp=timestamp,
+        source_ip=source_ip,
+        user=user,
+        event_id=event_id,
+        log_source=LogSource.AUTH,
+        log_source_type=LogSourceType.WINDOWS_SECURITY,
+        action=action,
+        status=status,
+        raw_log=raw_log,
+    )
+
+
+def _parse_cef_log(raw_log: str) -> LogEntry:
+    """Parse a CEF (Common Event Format) log line."""
+    timestamp = datetime.utcnow()
+
+    header_match = _CEF_HEADER_RE.search(raw_log)
+    extension: Dict[str, str] = {}
+    name = ""
+    if header_match:
+        name = header_match.group("name") or ""
+        extension = dict(_CEF_KV_RE.findall(header_match.group("extension")))
+
+    outcome = (extension.get("outcome") or extension.get("act") or "").lower()
+    if outcome in ("failure", "fail", "denied", "blocked", "reject"):
+        status = "failure"
+    elif outcome in ("success", "allow", "allowed", "accept"):
+        status = "success"
+    else:
+        status = "failure" if _FAILURE_TOKEN_RE.search(raw_log) else "success"
+
+    action = extension.get("act") or name.strip().lower().replace(" ", "_") or "cef_event"
+
+    source_ip = extension.get("src")
+    if not source_ip:
+        ips = _IP_RE.findall(raw_log)
+        source_ip = ips[0] if ips else "unknown"
+
+    dpt = extension.get("dpt")
+
+    return LogEntry(
+        timestamp=timestamp,
+        source_ip=source_ip,
+        destination_ip=extension.get("dst"),
+        destination_port=int(dpt) if dpt and dpt.isdigit() else None,
+        user=extension.get("duser") or extension.get("suser"),
+        log_source=LogSource.AUTH if "login" in name.lower() or "auth" in name.lower() else LogSource.SYSTEM,
+        log_source_type=LogSourceType.FIREWALL,
         action=action,
         status=status,
         raw_log=raw_log,

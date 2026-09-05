@@ -7,7 +7,6 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from app.database.postgres import get_db
-from app.database.redis_client import get_redis_client
 from app.database.repositories import IncidentRepository
 from app.database.models import AgentExecutionLogModel
 from app.models.incident import Incident

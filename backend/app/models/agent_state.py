@@ -10,12 +10,21 @@ from app.models.log_entry import LogEntry
 
 
 class AgentMessage(BaseModel):
-    """Structured agent message for execution log."""
+    """Structured agent message for execution log.
+
+    Each agent populates duration_ms (wall-clock time), tools_used (LLM tool-call
+    names, where the agent binds any), and output_data (small summary counters it
+    already computes - e.g. alerts_generated, confidence_score). input_data is
+    deliberately left empty by every agent: capturing the actual inputs (full log
+    batches, prior agent outputs) would meaningfully bloat agent_execution_log's
+    per-incident state/DB size for a debug-only feature, and the same information
+    is already visible via the incident's own logs/alerts/report fields.
+    """
 
     agent_name: str
     timestamp: str
-    input_data: Dict[str, Any]
-    output_data: Dict[str, Any]
+    input_data: Dict[str, Any] = {}
+    output_data: Dict[str, Any] = {}
     tools_used: List[str] = []
     reasoning: Optional[str] = None
     duration_ms: Optional[float] = None

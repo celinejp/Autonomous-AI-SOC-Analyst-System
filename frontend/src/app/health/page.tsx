@@ -22,9 +22,12 @@ export default function HealthPage() {
   });
 
   const isHealthy = health?.status === 'healthy' || health?.status === 'ok';
-  const dbStatus = health?.database === 'ok' || health?.database === 'connected';
-  const redisStatus = health?.redis === 'ok' || health?.redis === 'connected';
-  const qdrantStatus = health?.qdrant === 'ok' || health?.qdrant === 'connected';
+  const checkPassed = (check: unknown) =>
+    check === 'ok' || check === 'connected' ||
+    (typeof check === 'object' && check !== null && (check as { status?: string }).status === 'pass');
+  const dbStatus = checkPassed(health?.checks?.database ?? health?.database);
+  const redisStatus = checkPassed(health?.checks?.redis ?? health?.redis);
+  const qdrantStatus = checkPassed(health?.checks?.qdrant ?? health?.qdrant);
 
   return (
     <div className="min-h-screen bg-gray-950 p-8">

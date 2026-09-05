@@ -296,6 +296,10 @@ def evaluate_attack_rules(logs: List[LogEntry], rules: Dict[str, Dict[str, Any]]
         rules = ATTACK_DETECTION_RULES
 
     alerts = []
+    # LogEntry.id is never populated during ingest (nothing assigns it) - reference
+    # matched logs by their position in `logs` instead, consistent with every other
+    # alert path in detection_agent.py (related_log_indices / range(len(logs))).
+    log_positions = {id(log): i for i, log in enumerate(logs)}
 
     # Group logs by required telemetry type
     logs_by_source = {}
@@ -338,7 +342,7 @@ def evaluate_attack_rules(logs: List[LogEntry], rules: Dict[str, Dict[str, Any]]
                     "name": rule.get("name"),
                     "tactic": rule.get("tactic"),
                     "severity": rule.get("severity_base", "medium"),
-                    "matched_logs": [log.id for log in matched_logs],
+                    "matched_logs": [str(log_positions[id(log)]) for log in matched_logs],
                     "confidence": min(0.9, 0.5 + (len(matched_logs) * 0.1)),
                 }
             )

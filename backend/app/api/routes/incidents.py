@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from app.database.postgres import get_db
 from app.database.repositories import IncidentRepository
-from app.database.redis_client import get_redis_client
 from app.database.models import ResponsePlanModel
 from app.models.incident import Incident, IncidentStatus, Severity
 from app.core.logging import get_logger
@@ -116,6 +115,8 @@ async def create_incident(
     }
     
     incident_model = await IncidentRepository.create(db, incident_data)
+    from app.core.cache import invalidate_incident_caches
+    await invalidate_incident_caches()
     return await IncidentRepository.model_to_pydantic(incident_model)
 
 
@@ -137,7 +138,9 @@ async def update_incident(
     incident_model = await IncidentRepository.update(db, incident_id, incident_data)
     if not incident_model:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
+    from app.core.cache import invalidate_incident_caches
+    await invalidate_incident_caches()
     return await IncidentRepository.model_to_pydantic(incident_model)
 
 
@@ -202,6 +205,8 @@ async def update_incident_status(
         raise HTTPException(status_code=404, detail="Incident not found")
     incident_data = {"status": status_enum}
     updated = await IncidentRepository.update(db, incident_id, incident_data)
+    from app.core.cache import invalidate_incident_caches
+    await invalidate_incident_caches()
     return await IncidentRepository.model_to_pydantic(updated)
 
 
@@ -214,7 +219,9 @@ async def delete_incident(
     success = await IncidentRepository.delete(db, incident_id)
     if not success:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
+    from app.core.cache import invalidate_incident_caches
+    await invalidate_incident_caches()
     return {"message": "Incident deleted"}
 
 
@@ -235,44 +242,41 @@ async def get_incident_status(
 ):
     """Get current status of incident analysis (for polling)."""
     # Check Redis for live status
-    redis = get_redis_client()
+    from app.database.redis_client import hgetall
+
     status_key = f"incident_status:{incident_id}"
     
-    if redis:
-        try:
-            status_data = redis.hgetall(status_key)
-            if status_data:
-                # Convert bytes to strings
-                status_data = {k.decode() if isinstance(k, bytes) else k: 
-                             v.decode() if isinstance(v, bytes) else v
-                             for k, v in status_data.items()}
-                
-                progress = int(status_data.get("progress_percent", "0"))
-                estimated_duration = int(status_data.get("estimated_duration", str(TOTAL_ESTIMATED_SECONDS)))
-                current_agent = status_data.get("current_agent")
-                
-                # Calculate ETA
-                started_at_str = status_data.get("started_at")
-                eta_seconds = None
-                if started_at_str:
-                    try:
-                        started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
-                        elapsed = (datetime.utcnow() - started_at.replace(tzinfo=None)).total_seconds()
-                        remaining = estimated_duration - elapsed
-                        eta_seconds = max(0, int(remaining))
-                    except Exception:
-                        pass
-                
-                return IncidentStatusResponse(
-                    status=status_data.get("status", "analyzing"),
-                    progress_percent=progress,
-                    current_agent=current_agent,
-                    eta_seconds=eta_seconds,
-                    message=status_data.get("message"),
-                    error=status_data.get("error"),
-                )
-        except Exception as e:
-            logger.warning(f"Redis status check failed: {e}")
+    try:
+        status_data = await hgetall(status_key)
+        if status_data:
+            progress = int(status_data.get("progress_percent", "0") or 0)
+            estimated_duration = int(
+                status_data.get("estimated_duration", str(TOTAL_ESTIMATED_SECONDS)) or TOTAL_ESTIMATED_SECONDS
+            )
+            current_agent = status_data.get("current_agent") or None
+            
+            # Calculate ETA
+            started_at_str = status_data.get("started_at")
+            eta_seconds = None
+            if started_at_str:
+                try:
+                    started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
+                    elapsed = (datetime.utcnow() - started_at.replace(tzinfo=None)).total_seconds()
+                    remaining = estimated_duration - elapsed
+                    eta_seconds = max(0, int(remaining))
+                except Exception:
+                    pass
+            
+            return IncidentStatusResponse(
+                status=status_data.get("status", "analyzing"),
+                progress_percent=progress,
+                current_agent=current_agent,
+                eta_seconds=eta_seconds,
+                message=status_data.get("message"),
+                error=status_data.get("error"),
+            )
+    except Exception as e:
+        logger.warning(f"Redis status check failed: {e}")
     
     # Fallback: check database
     try:

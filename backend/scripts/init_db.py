@@ -16,13 +16,15 @@ async def main():
 
     print("\nInitializing Qdrant collections...")
     try:
-        # Incident embeddings collection
-        await ensure_collection("incidents", vector_size=1536)
-        print("✓ Qdrant 'incidents' collection created")
-        
+        from app.database.vector_store import VECTOR_SIZE
+
+        # Incident embeddings collection (768 = nomic-embed-text / pgvector)
+        await ensure_collection("incidents", vector_size=VECTOR_SIZE)
+        print(f"✓ Qdrant 'incidents' collection created (dim={VECTOR_SIZE})")
+
         # MITRE techniques collection
-        await ensure_collection("mitre_techniques", vector_size=1536)
-        print("✓ Qdrant 'mitre_techniques' collection created")
+        await ensure_collection("mitre_techniques", vector_size=VECTOR_SIZE)
+        print(f"✓ Qdrant 'mitre_techniques' collection created (dim={VECTOR_SIZE})")
     except Exception as e:
         print(f"✗ Qdrant error: {e}")
 

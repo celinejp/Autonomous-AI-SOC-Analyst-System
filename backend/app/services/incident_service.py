@@ -141,12 +141,21 @@ class IncidentService:
                 return []
             return [x.dict() if hasattr(x, "dict") else (x if isinstance(x, dict) else {}) for x in val]
         if response_plan:
+            actions_by_team = (
+                response_plan.get("actions_by_team", {})
+                if isinstance(response_plan, dict)
+                else getattr(response_plan, "actions_by_team", {})
+            ) or {}
             plan_model = ResponsePlanModel(
                 incident_id=incident_id,
                 containment_actions=_plan_list(response_plan, "containment_actions"),
                 investigation_steps=_plan_list(response_plan, "investigation_steps"),
                 remediation_actions=_plan_list(response_plan, "remediation_actions"),
                 long_term_improvements=_plan_list(response_plan, "long_term_improvements"),
+                actions_by_team={
+                    team: [a.dict() if hasattr(a, "dict") else a for a in actions]
+                    for team, actions in actions_by_team.items()
+                },
             )
             session.add(plan_model)
 
@@ -205,5 +214,18 @@ class IncidentService:
 
         await session.commit()
         await session.refresh(incident_model)
+
+        # Outbox-style: enqueue embedding dual-write (Postgres + Qdrant) and bust caches
+        try:
+            from app.core.job_queue import enqueue_embed_job
+            from app.core.cache import invalidate_incident_caches
+
+            await enqueue_embed_job(incident_id)
+            await invalidate_incident_caches()
+        except Exception as e:
+            # Durable incident already saved; embed worker can be retried manually
+            import logging
+            logging.getLogger(__name__).warning("Failed to enqueue embed/cache bust: %s", e)
+
         return incident_id
 

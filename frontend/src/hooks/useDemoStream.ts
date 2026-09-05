@@ -61,7 +61,7 @@ export function useDemoStream() {
               const json = line.slice(6);
               if (json === '[DONE]' || json === '') continue;
               const payload = JSON.parse(json) as { event?: string; incident_id?: string; [k: string]: unknown };
-              const eventType = payload.event || payload.type;
+              const eventType = payload.event || (payload.type as string | undefined);
               const ev: StreamEvent = {
                 type: eventType || 'message',
                 incident_id: payload.incident_id as string | undefined,
@@ -80,7 +80,8 @@ export function useDemoStream() {
                 if (payload.incident_id) setIncidentId(payload.incident_id as string);
               } else if (eventType === 'error') {
                 setStatus('error');
-                setError((payload.message || payload.data?.message) as string || 'Stream error');
+                const dataObj = payload.data as { message?: string } | undefined;
+                setError((payload.message as string | undefined) || dataObj?.message || 'Stream error');
               }
             } catch (e) {
               // ignore parse errors for non-JSON lines

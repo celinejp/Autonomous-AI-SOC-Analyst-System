@@ -34,9 +34,8 @@ export function useIncident(id: string) {
       }
       
       // Keep polling if analyzing or in progress
-      if (incident?.status === IncidentStatus.IN_PROGRESS || 
-          incident?.status === IncidentStatus.INVESTIGATING ||
-          incident?.status === 'analyzing') {
+      if (incident?.status === IncidentStatus.IN_PROGRESS ||
+          incident?.status === IncidentStatus.INVESTIGATING) {
         return 5000; // Poll every 5 seconds
       }
       return false;
