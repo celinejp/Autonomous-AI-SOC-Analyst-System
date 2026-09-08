@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from app.core.llm_factory import get_llm
+from app.core.logging import get_logger
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.base import BaseAgent
@@ -12,6 +13,13 @@ from app.models.agent_state import AgentState
 from app.models.incident import IncidentReport, Severity
 from app.tools.similarity_search import search_similar_incidents
 from app.tools.ip_lookup import lookup_ip
+
+logger = get_logger(__name__)
+
+
+class _ReportParseError(Exception):
+    """Raised when the LLM's response can't be parsed as the expected JSON report -
+    distinct from a legitimate empty/minimal report, so callers know to retry."""
 
 SYSTEM_PROMPT = """You are a Tier 2 SOC Analyst performing deep investigation.
 
@@ -122,9 +130,22 @@ Use tools to search for similar past incidents if helpful."""
 
     content = response.content
 
-    # Parse incident report from response
-    incident_report = _parse_incident_report(content, alerts, logs)
-    
+    # Parse incident report from response. The LLM occasionally emits JSON that
+    # fails to parse (unescaped newlines inside string values, or a spurious
+    # second {...} block after the real one confusing the greedy regex) -
+    # confirmed live. One retry recovers those transient misses instead of
+    # silently falling back to a much worse placeholder-filled report.
+    try:
+        incident_report = _parse_incident_report(content, alerts, logs)
+    except _ReportParseError as e:
+        logger.warning("analyst_agent: report JSON failed to parse, retrying once: %s", e)
+        retry_response = await llm.ainvoke(messages)
+        try:
+            incident_report = _parse_incident_report(retry_response.content, alerts, logs)
+        except _ReportParseError as e2:
+            logger.warning("analyst_agent: retry also failed to parse, using fallback report: %s", e2)
+            incident_report = _fallback_report(retry_response.content, alerts, logs)
+
     # Update highest severity
     max_severity = max((a.severity for a in alerts), key=lambda s: Severity.__members__.get(s.value, 0))
 
@@ -152,27 +173,49 @@ def _parse_incident_report(content: str, alerts: List, logs: List) -> IncidentRe
     import re
 
     json_match = re.search(r'\{.*\}', content, re.DOTALL)
-    if json_match:
-        try:
-            report_data = json.loads(json_match.group())
-            confidence_score = float(report_data.get("confidence_score", 0.75) or 0.75)
-            confidence_score = min(max(confidence_score, 0.0), 1.0)
-            return IncidentReport(
-                executive_summary=str(report_data.get("executive_summary") or content[:500]),
-                technical_findings=str(report_data.get("technical_findings") or content[:1000]),
-                timeline=report_data.get("timeline") or _default_timeline(alerts),
-                affected_assets=report_data.get("affected_assets") or _default_affected_assets(alerts, logs),
-                root_cause=str(report_data.get("root_cause") or "Analysis in progress"),
-                impact_assessment=str(report_data.get("impact_assessment") or "Assessment pending"),
-                confidence_score=confidence_score,
-                reasoning_process=report_data.get("reasoning_process") or [content[:200]],
-                detection_gaps=_parse_detection_gaps(report_data.get("detection_gaps")),
-                lessons_learned=[str(x) for x in (report_data.get("lessons_learned") or [])],
-            )
-        except Exception:
-            pass
+    if not json_match:
+        raise _ReportParseError(f"no JSON object found in response: {content[:300]!r}")
 
-    return _fallback_report(content, alerts, logs)
+    try:
+        report_data = json.loads(json_match.group())
+    except Exception as e:
+        raise _ReportParseError(f"invalid JSON ({e}): {json_match.group()[:300]!r}") from e
+
+    if not isinstance(report_data, dict):
+        raise _ReportParseError(f"parsed JSON is not an object: {type(report_data).__name__}")
+
+    # The model can produce syntactically valid JSON that's still garbage - e.g.
+    # dumping the entire object (or a duplicate of it) as the string value of a
+    # single field, so json.loads "succeeds" but every other field silently
+    # falls back to its placeholder default (confirmed live: a 1598-char
+    # "executive_summary" containing the literal substrings of every other key,
+    # while root_cause/impact_assessment ended up as their hardcoded defaults).
+    # A 2-3 sentence executive summary that also contains other schema field
+    # names is a reliable signal of that failure mode, worth a retry.
+    exec_summary_raw = report_data.get("executive_summary")
+    if isinstance(exec_summary_raw, str) and (
+        len(exec_summary_raw) > 800
+        or '"technical_findings"' in exec_summary_raw
+        or '"root_cause"' in exec_summary_raw
+    ):
+        raise _ReportParseError(
+            f"executive_summary looks like a dumped/duplicated blob ({len(exec_summary_raw)} chars): {exec_summary_raw[:200]!r}"
+        )
+
+    confidence_score = float(report_data.get("confidence_score", 0.75) or 0.75)
+    confidence_score = min(max(confidence_score, 0.0), 1.0)
+    return IncidentReport(
+        executive_summary=str(report_data.get("executive_summary") or content[:500]),
+        technical_findings=str(report_data.get("technical_findings") or content[:1000]),
+        timeline=report_data.get("timeline") or _default_timeline(alerts),
+        affected_assets=report_data.get("affected_assets") or _default_affected_assets(alerts, logs),
+        root_cause=str(report_data.get("root_cause") or "Analysis in progress"),
+        impact_assessment=str(report_data.get("impact_assessment") or "Assessment pending"),
+        confidence_score=confidence_score,
+        reasoning_process=report_data.get("reasoning_process") or [content[:200]],
+        detection_gaps=_parse_detection_gaps(report_data.get("detection_gaps")),
+        lessons_learned=[str(x) for x in (report_data.get("lessons_learned") or [])],
+    )
 
 
 def _default_timeline(alerts: List) -> List[Dict[str, Any]]:

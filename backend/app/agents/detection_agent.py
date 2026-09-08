@@ -5,24 +5,56 @@ from typing import Any, Dict, List
 from collections import Counter
 
 from app.core.llm_factory import get_llm
+from app.core.logging import get_logger
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.agent_state import AgentState
 from app.models.incident import Alert, Severity
 from app.models.log_entry import LogEntry
 
+logger = get_logger(__name__)
+
+
+class _AlertParseError(Exception):
+    """Raised when the LLM's response can't be parsed as a JSON alerts array at
+    all - distinct from the LLM legitimately returning an empty array (no
+    threats found), which is a normal, valid outcome and must not be retried."""
+
 SYSTEM_PROMPT = """You are a security detection agent. Analyze normalized security logs and identify ONLY clear security threats.
 
-Detect these when evidence is strong:
-1. Brute force (multiple failed logins from same IP)
-2. Port scanning (many distinct destination ports)
-3. Data exfiltration (large unusual outbound transfers)
-4. Lateral movement (unusual internal admin hops after compromise signals)
-5. C2 / anomalous DNS (DGA, beaconing)
-6. Privilege escalation or malware execution
+Logs may come in ANY format - key=value syslog, Windows Security Event text,
+Sysmon process/file events, CEF, raw JSON (including Kubernetes audit events),
+Zeek/Bro network logs, or plain prose from an email/proxy gateway. Do not expect
+one convention - read the raw field values themselves, not just recognizable
+keywords.
+
+Detect these when evidence is strong, including in unfamiliar formats:
+1. Brute force (multiple failed logins from same IP/account, any log format)
+2. Port scanning (many distinct destination ports from one source)
+3. Data exfiltration (large or unusual outbound transfer volume - check byte
+   counts/duration fields directly in network logs, not just the word "exfil")
+4. Lateral movement (unusual internal admin hops, admin-share/RDP access after
+   a compromise signal)
+5. C2 / anomalous DNS (beaconing intervals; DNS queries with long, high-entropy,
+   random-looking subdomains are a tunneling indicator even without the word
+   "tunnel" - judge by the string's randomness, not a keyword)
+6. Privilege escalation or malware execution, INCLUDING:
+   - Ransomware: file rename/creation events adding a new extension across many
+     files in a short window, or a ransom-note-like filename being created
+   - Credential dumping: any process (not just known tool names) accessing
+     lsass.exe / dumping process memory
+   - Cloud/orchestration privilege escalation: granting a broad role (e.g.
+     "cluster-admin", "*:*") to a low-trust or anonymous identity in a
+     Kubernetes/IAM audit event is privilege escalation regardless of wording
+   - Phishing: a malicious/flagged verdict on an email attachment (from a
+     sandbox, AV, or gateway verdict field) followed by the user opening it
 
 CRITICAL FALSE-POSITIVE RULES:
-- Routine admin work, backups, VPN+MFA success, software updates, cloud sync, and approved testing are NOT alerts.
+- Routine admin work, backups, VPN+MFA success, software updates, cloud sync,
+  and activity explicitly tied to a change ticket / approved maintenance window
+  are NOT alerts, even if the specific wording ("approved=true", "ticket=...",
+  a scanner name) differs from examples you've seen before - judge intent, not
+  exact phrasing.
 - If activity looks legitimate or ambiguous, return an empty JSON array: []
 - Do NOT invent alerts. Prefer zero alerts over noisy ones.
 - Only emit an alert when you have concrete evidence in the logs.
@@ -132,9 +164,22 @@ async def detection_agent(state: AgentState) -> AgentState:
     ]
 
     response = await llm.ainvoke(messages)
-    content = response.content
 
-    alerts = _parse_alerts_from_response(content, logs)
+    try:
+        alerts = _parse_alerts_from_response(response.content, logs)
+    except _AlertParseError as e:
+        # The LLM can reason correctly but still occasionally emit malformed JSON
+        # on a verbose response - confirmed live (gpt-oss:120b-cloud correctly
+        # identified a k8s privilege-escalation event, then failed to parse on a
+        # retry of the identical input). One retry recovers those transient
+        # misses instead of silently downgrading a correct answer into "no threat".
+        logger.warning("detection_agent: LLM response failed to parse, retrying once: %s", e)
+        try:
+            retry_response = await llm.ainvoke(messages)
+            alerts = _parse_alerts_from_response(retry_response.content, logs)
+        except _AlertParseError as e2:
+            logger.warning("detection_agent: retry also failed to parse, defaulting to no LLM alerts: %s", e2)
+            alerts = []
 
     from app.detection.attack_rules import evaluate_attack_rules
 
@@ -179,31 +224,38 @@ def _create_log_summary(logs: List[LogEntry]) -> str:
             f"{i}: [{log.timestamp}] {log.log_source.value} | "
             f"src={log.source_ip} dst={log.destination_ip}:{log.destination_port} | "
             f"user={log.user} | action={log.action} | status={log.status} | "
-            f"raw={(log.raw_log or '')[:160]}"
+            f"raw={(log.raw_log or '')[:500]}"
         )
     return "\n".join(summary_lines)
 
 
 def _parse_alerts_from_response(content: str, logs: List[LogEntry]) -> List[Alert]:
-    """Parse alerts from LLM response. Never invent alerts from prose."""
+    """Parse alerts from LLM response. Never invent alerts from prose.
+
+    Raises _AlertParseError when the response can't be parsed as a JSON array at
+    all (no brackets found, invalid JSON, or not a list) - that's a malformed
+    response worth a retry, not the same thing as the LLM correctly returning an
+    empty array because it found no threats.
+    """
     import json
     import re
 
     alerts: List[Alert] = []
     json_match = re.search(r'\[.*\]', content, re.DOTALL)
     if not json_match:
-        return alerts
+        raise _AlertParseError(f"no JSON array found in response: {content[:300]!r}")
 
     try:
         alerts_data = json.loads(json_match.group())
-    except Exception:
-        return alerts
+    except Exception as e:
+        raise _AlertParseError(f"invalid JSON ({e}): {json_match.group()[:300]!r}") from e
 
     if not isinstance(alerts_data, list):
-        return alerts
+        raise _AlertParseError(f"parsed JSON is not a list: {type(alerts_data).__name__}")
 
     for alert_data in alerts_data:
         if not isinstance(alert_data, dict):
+            logger.warning("detection_agent: skipping non-dict alert item: %r", alert_data)
             continue
         try:
             sev_raw = str(alert_data.get("severity", "medium")).lower()
@@ -212,18 +264,26 @@ def _parse_alerts_from_response(content: str, logs: List[LogEntry]) -> List[Aler
             # Drop speculative low LLM alerts
             if sev_raw == "low":
                 continue
+            # Alert.evidence is List[Dict[str, Any]], but the prompt asks the LLM for
+            # "short strings" - a capable, instruction-following model (confirmed live
+            # with gpt-oss:120b-cloud) does exactly that and fails Pydantic validation
+            # every time, silently dropping an otherwise-correct alert. Normalize
+            # either shape instead of trusting the LLM to guess our internal schema.
+            raw_evidence = alert_data.get("evidence", []) or []
+            evidence = [e if isinstance(e, dict) else {"note": str(e)} for e in raw_evidence]
             alert = Alert(
                 timestamp=datetime.utcnow(),
                 severity=Severity(sev_raw),
                 title=alert_data.get("title", "Suspicious activity detected"),
                 description=alert_data.get("description", ""),
                 detection_rule=alert_data.get("detection_rule", "LLM-detected pattern"),
-                evidence=alert_data.get("evidence", []) or [],
+                evidence=evidence,
                 related_logs=[str(i) for i in alert_data.get("related_log_indices", [])],
                 mitre_techniques=alert_data.get("mitre_techniques", []) or [],
             )
             alerts.append(alert)
-        except Exception:
+        except Exception as e:
+            logger.warning("detection_agent: failed to construct Alert from LLM item: %s | item=%r", e, alert_data)
             continue
 
     return alerts
