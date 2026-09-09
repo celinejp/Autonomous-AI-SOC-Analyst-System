@@ -61,40 +61,40 @@ docker-compose exec backend python scripts/test_all_features.py
 
 ### How It Works
 
-1. Select a test scenario (Brute Force, SQL Injection, Port Scan, Normal Traffic)
-2. Click "Run Test"
+1. Select a test scenario from the dropdown (6 scenarios, defined in
+   `frontend/src/app/ingest/page.tsx`'s `DEMO_SCENARIOS`)
+2. Click "Run Demo Scenario"
 3. System automatically:
-   - Submits logs for analysis
-   - Waits for completion (up to 90 seconds)
-   - Validates against expected criteria
-   - Shows PASS/FAIL status
+   - Streams synthetic logs for the scenario and runs the workflow inline in the
+     `backend` container (not queued to the `worker`)
+   - Renders live agent-by-agent progress over SSE
+   - Redirects to the resulting incident on completion
 
 ### Test Scenarios
 
-#### 1. Brute Force Attack
-- **Expected:** High severity, T1110.001 (Brute Force)
-- **What it tests:** Detection of repeated failed login attempts
+The 6 scenarios currently available in the Demo Mode dropdown:
 
-#### 2. SQL Injection Attempt
-- **Expected:** High severity, T1190 (Exploit Public-Facing Application)
-- **What it tests:** Detection of SQL injection patterns
+1. **Brute Force (T1110)** - SSH brute force attack with multiple failed login attempts
+2. **PowerShell Execution (T1059.001)** - Suspicious PowerShell commands and encoded scripts
+3. **RDP Lateral Movement (T1021.001)** - Lateral movement via Remote Desktop Protocol
+4. **Ransomware (T1486)** - File encryption and ransomware indicators
+5. **Cloud IAM Abuse** - AWS IAM privilege escalation and backdoor creation
+6. **Port Scan (T1046)** - Network reconnaissance port scanning activity
 
-#### 3. Port Scan
-- **Expected:** Medium severity, T1046 (Network Service Scanning)
-- **What it tests:** Detection of reconnaissance activity
-
-#### 4. Normal Traffic
-- **Expected:** Low severity, no alerts
-- **What it tests:** False positive rate (should NOT alert)
+There is no "Normal Traffic" or "SQL Injection" scenario in Demo Mode - those exist
+only as `backend/tests/fixtures/` files exercised by `test_all_features.py`, not as
+Demo Mode options (see [Test Fixtures](#test-fixtures) below).
 
 ### What Gets Validated
 
-Each test checks:
-- ✅ **Severity Match:** Actual severity meets minimum expected
-- ✅ **MITRE Mapping:** Expected techniques are identified
-- ✅ **Alert Generation:** Minimum number of alerts generated
-- ✅ **Timeline Exists:** Incident report includes timeline
-- ✅ **Recommendations:** Response plan includes actions
+Demo Mode itself does not display a PASS/FAIL verdict - it streams progress and redirects
+to the resulting incident. To check a run's incident against expected criteria, call
+`/api/debug/validate-incident/{id}` afterward (see below), which checks:
+- ✅ **severity_match:** Actual severity meets minimum expected
+- ✅ **has_mitre_techniques / correct_technique:** Expected techniques are identified
+- ✅ **has_alerts / meets_min_alerts:** Minimum number of alerts generated
+- ✅ **has_report:** Incident report was generated
+- ✅ **has_response_plan:** Response plan was generated
 
 ---
 
@@ -119,11 +119,14 @@ curl -X POST http://localhost:8000/api/ingest/analyze \
 ```json
 {
   "incident_id": "uuid-here",
-  "status": "analyzing",
+  "status": "queued",
   "estimated_duration_seconds": 45,
+  "message": "Analysis queued on Redis Streams worker.",
   "logs_processed": 2
 }
 ```
+The analysis itself runs in the separate `worker` container, which consumes the queued
+job from Redis Streams - it is not processed inline by the request that queued it.
 
 ### 2. Check Analysis Status
 
@@ -156,7 +159,7 @@ curl http://localhost:8000/api/incidents/{incident_id}
 **Endpoint:** `GET /api/debug/validate-incident/{incident_id}`
 
 ```bash
-curl "http://localhost:8000/api/debug/validate-incident/{incident_id}?expected_severity=high&expected_mitre_techniques=T1110.001&expected_min_alerts=1"
+curl "http://localhost:8000/api/debug/validate-incident/{incident_id}?expected_severity=high&expected_mitre_techniques=T1110&expected_min_alerts=1"
 ```
 
 **Response:**
@@ -165,15 +168,16 @@ curl "http://localhost:8000/api/debug/validate-incident/{incident_id}?expected_s
   "passed": true,
   "checks": {
     "severity_match": true,
-    "has_mitre_techniques": true,
+    "meets_min_alerts": true,
     "correct_technique": true,
-    "timeline_exists": true,
-    "has_recommendations": true,
-    "meets_min_alerts": true
+    "has_alerts": true,
+    "has_mitre_techniques": true,
+    "has_report": true,
+    "has_response_plan": true
   },
   "actual": {
     "severity": "high",
-    "mitre_techniques": ["T1110.001"],
+    "mitre_techniques": ["T1110"],
     "alerts_count": 1
   }
 }
@@ -187,23 +191,30 @@ curl "http://localhost:8000/api/debug/validate-incident/{incident_id}?expected_s
 curl http://localhost:8000/api/debug/last-analysis/{incident_id}
 ```
 
-**Response:**
+**Response:** (one entry per agent, keyed by `agent_name`; no top-level "status" per agent -
+absence of an entry means that agent didn't run)
 ```json
 {
   "incident_id": "uuid",
   "workflow_trace": {
-    "ingest": {"status": "completed", "duration_ms": 450},
-    "detect": {"status": "completed", "duration_ms": 3200},
-    "enrich": {"status": "completed", "duration_ms": 2800},
-    "analyze": {"status": "completed", "duration_ms": 5100},
-    "critique": {"status": "completed", "duration_ms": 1900},
-    "plan_response": {"status": "completed", "duration_ms": 2300}
+    "ingest": {"duration_ms": 450, "timestamp": "...", "tools_used": [], "reasoning": "...", "output": {}},
+    "detection": {"duration_ms": 3200, "timestamp": "...", "tools_used": [], "reasoning": "...", "output": {}},
+    "threat_intel": {"duration_ms": 2800, "timestamp": "...", "tools_used": ["mitre_search"], "reasoning": "...", "output": {}},
+    "analyst": {"duration_ms": 5100, "timestamp": "...", "tools_used": [], "reasoning": "...", "output": {}},
+    "critic": {"duration_ms": 1900, "timestamp": "...", "tools_used": [], "reasoning": "...", "output": {}},
+    "response_planner": {"duration_ms": 2300, "timestamp": "...", "tools_used": [], "reasoning": "...", "output": {}}
   },
   "final_output": {
     "severity": "high",
-    "mitre_techniques": ["T1110.001"],
-    "alerts_count": 1
-  }
+    "mitre_techniques": ["T1110"],
+    "alerts_count": 1,
+    "confidence_score": 0.9,
+    "has_report": true,
+    "has_response_plan": true,
+    "reason_for_failure": null
+  },
+  "overall_status": "new",
+  "analysis_timestamp": "..."
 }
 ```
 
@@ -236,6 +247,15 @@ All test fixtures are in: `backend/tests/fixtures/`
 5. **`normal_traffic.json`**
    - Benign web traffic
    - Expected: Low severity, no alerts
+
+6. **`test_logs.json`**
+   - Different structure from the 5 above: `{"scenarios": [...]}`, a list of 5 named
+     cases (brute force, and others), each with its own `expected_severity` /
+     `expected_techniques` / `logs`
+   - Used by `backend/tests/test_system_health.py` (pytest) and
+     `backend/scripts/eval_detection_metrics.py`, not by `test_all_features.py`
+   - Deliberately excluded from the synthetic-data fixture loader
+     (`backend/app/api/routes/synthetic_data.py`)
 
 ### Fixture Structure
 
@@ -341,9 +361,9 @@ If detection is failing, the issue might be:
 - Prompt engineering needs improvement
 - MITRE ATT&CK data not loaded in Qdrant
 
-**Verify MITRE data:**
+**Verify MITRE data (semantic search over the loaded techniques):**
 ```bash
-curl http://localhost:8000/api/mitre/techniques | jq '.[] | select(.technique_id == "T1110.001")'
+curl "http://localhost:8000/api/v1/mitre/search?q=brute+force+password+guessing&limit=5" | jq
 ```
 
 ### 3. Check Log Parsing
@@ -358,7 +378,7 @@ If logs aren't being parsed correctly:
 Use the validation endpoint to see exact mismatches:
 
 ```bash
-curl "http://localhost:8000/api/debug/validate-incident/$INCIDENT_ID?expected_severity=high&expected_mitre_techniques=T1110.001"
+curl "http://localhost:8000/api/debug/validate-incident/$INCIDENT_ID?expected_severity=high&expected_mitre_techniques=T1110"
 ```
 
 This shows:
@@ -370,19 +390,23 @@ This shows:
 
 ## Common Issues & Solutions
 
-### Issue: Demo Mode shows all tests as FAIL
+### Issue: Demo Mode stream errors out or never completes
+
+Demo Mode itself has no PASS/FAIL verdict (see [above](#what-gets-validated)) - a failed
+run surfaces as an `error` stream status with a message, or a stream that never reaches
+completion.
 
 **Causes:**
 1. Analysis not completing (timeout)
 2. LLM not detecting patterns correctly
-3. MITRE techniques not matching
-4. Severity threshold too high
+3. MITRE techniques not matching expectations
+4. Backend error mid-stream (check the browser console / network tab for the SSE response)
 
 **Solutions:**
-1. Check debug endpoint to see agent execution
+1. Check the debug endpoint to see agent execution for the resulting incident (if one was created)
 2. Verify MITRE ATT&CK data is loaded
 3. Review LLM prompts in detection agent
-4. Adjust expected severity if needed
+4. Use `/api/debug/validate-incident/{id}` afterward to check the incident against expected criteria
 
 ### Issue: Tests timeout after 90 seconds
 
@@ -424,6 +448,6 @@ This shows:
 
 - Review `backend/app/agents/` to understand agent logic
 - Check `backend/tests/fixtures/` for example test scenarios
-- Use `scripts/test_all_features.py` for automated validation
+- Use `backend/scripts/test_all_features.py` for automated validation
 - Consult `README.md` for setup instructions
 

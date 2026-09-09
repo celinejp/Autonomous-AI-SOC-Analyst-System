@@ -14,6 +14,29 @@ Think of it like this:
 
 Each "rule" is like a **detection pattern** for a specific attack technique.
 
+## Reality check: how detection actually runs today
+
+Two separate layers both map to these techniques, and it's worth knowing which one
+actually fires before repeating a specific claim in an interview:
+
+1. **`backend/app/detection/attack_rules.py`** - the structured, telemetry-typed engine
+   this doc describes (threshold/regex/event-ID patterns per technique). Several of its
+   rules - including T1110.001's threshold pattern - key off fields like `auth_result`
+   that the current log parsers never populate, so those specific rules don't fire on
+   real traffic yet. Its threshold patterns also don't currently enforce the
+   `window_seconds` value in their own config (e.g. T1110.001 lists 60s, but the checker
+   counts matches with no time boundary).
+2. **`backend/app/agents/detection_agent.py`'s own simpler rule set** - a separate ~14
+   keyword/threshold checks (brute force, port scan, ransomware, credential dumping,
+   phishing, lateral movement, SQLi, C2, DNS tunneling, etc.) plus the LLM's own
+   judgment. This is what actually produces most alerts in live testing - e.g. brute
+   force there is "3+ failed logins from one source, no time window," tagged plain
+   `T1110`, not the more specific `T1110.001` described below.
+
+Both layers exist and both matter, but if you're asked "how exactly does the time window
+work," the honest answer today is "it doesn't yet for the threshold rules - detection is
+count-based, not time-windowed."
+
 ## The 24 Attack Techniques Your System Detects
 
 ### 1. **Initial Access** (How hackers get in)
@@ -118,7 +141,7 @@ Each "rule" is like a **detection pattern** for a specific attack technique.
 
 **Step 2:** Detection Agent checks logs against all 24 MITRE ATT&CK rules
 
-**Step 3:** If a pattern matches (e.g., "5 failed logins in 60 seconds" = T1110.001 Brute Force)
+**Step 3:** If a pattern matches (e.g., "3+ failed logins from one source" = T1110 Brute Force)
 
 **Step 4:** System creates an alert: "Brute Force Attack Detected - MITRE Technique T1110.001"
 
@@ -138,7 +161,7 @@ Each "rule" is like a **detection pattern** for a specific attack technique.
 *"MITRE ATT&CK is a framework that documents how hackers attack systems. My system has detection rules for 24 different attack techniques - things like brute force attacks, ransomware, data theft, and lateral movement. When the system sees logs matching these patterns, it creates an alert with the specific MITRE technique ID, so security analysts know exactly what type of attack is happening."*
 
 ### Technical Version:
-*"I implemented 24 MITRE ATT&CK detection rules covering the full attack lifecycle - from initial access techniques like phishing (T1566.001, T1566.002) through to impact techniques like ransomware (T1486). Each rule maps specific log patterns to ATT&CK techniques. For example, T1110.001 detects brute force by identifying 5+ failed authentication attempts within 60 seconds from the same source IP. This provides structured, standardized threat detection that security teams can immediately understand and respond to."*
+*"I implemented 24 MITRE ATT&CK detection rules covering the full attack lifecycle - from initial access techniques like phishing (T1566.001, T1566.002) through to impact techniques like ransomware (T1486). Each rule maps specific log patterns to ATT&CK techniques. For example, brute force is detected by identifying 3+ failed authentication attempts from the same source IP and tagged as T1110. This provides structured, standardized threat detection that security teams can immediately understand and respond to."*
 
 ### Banking Context:
 *"For banks, MITRE ATT&CK mapping is critical because:*

@@ -104,9 +104,28 @@ async def threat_intel_agent(state: AgentState) -> AgentState:
                         looked_up_ids.add(tid)
                         mitre_ids.add(tid)
 
-        # Also check alert's existing MITRE techniques (from rule-based detection - trusted)
-        mitre_ids.update(alert.mitre_techniques)
-        looked_up_ids.update(alert.mitre_techniques)
+        # Alerts from evaluate_attack_rules/_rule_based_detection carry a deterministic,
+        # already-precise technique_id (identified by their detection_rule provenance,
+        # matching the same is_rule check detection_agent._filter_alerts uses) - trust
+        # those outright. Alerts from the detection-stage LLM can name any technique ID
+        # with no similarity check of its own, so ground those the same way as every
+        # other LLM-sourced ID above - confirmed live this was the actual cause of MITRE
+        # precision collapsing (0.944 -> as low as 0.243) once a larger, denser technique
+        # catalog made an ungrounded guess likely to coincidentally exist in Qdrant.
+        is_rule_alert = (
+            (alert.detection_rule or "").startswith("ATT&CK Rule")
+            or (alert.detection_rule or "").startswith("rule:")
+            or alert.detection_rule in ("multiple_failed_logins", "port_scanning")
+        )
+        if is_rule_alert:
+            mitre_ids.update(alert.mitre_techniques)
+            looked_up_ids.update(alert.mitre_techniques)
+        else:
+            for tid in alert.mitre_techniques:
+                tid_upper = str(tid).upper()
+                looked_up_ids.add(tid_upper)
+                if tid_upper in grounded_ids:
+                    mitre_ids.add(tid_upper)
 
         # Get detailed technique info for everything looked up, even ids that didn't clear
         # grounding (useful context for the analyst), but only tagged ids go on the alert.

@@ -9,7 +9,7 @@ Summary of what is **implemented and connected** in the Autonomous AI SOC Analys
 ### Core workflow
 | Feature | Backend | Frontend | Notes |
 |--------|---------|----------|--------|
-| **Log ingestion** | `POST /api/ingest/analyze`, `POST /api/ingest/upload` | Ingest page (Upload tab): paste/upload logs, Analyze | Background processing, incident created then updated when workflow completes |
+| **Log ingestion** | `POST /api/ingest/analyze`, `POST /api/ingest/upload` | Ingest page (Upload tab): paste/upload logs, Analyze | Queued to Redis Streams, processed by the separate `worker` container; frontend polls incident status until the workflow completes |
 | **Demo mode** | `POST /api/v1/incidents/stream` (SSE) | Ingest page (Demo tab): scenario dropdown, Run Demo | Real-time agent stream, redirect to incident when done |
 | **Incident list** | `GET /api/incidents` (filters: status, severity, limit, offset) | Incidents page: table, filters, pagination | |
 | **Incident detail** | `GET /api/incidents/:id`, `PUT /api/incidents/:id/status`, `PATCH .../response-plan/actions/:id` | Incident page: report, alerts, IOCs, response plan, Mark Contained/Closed, Start Action, Block IP, Disable account, execution log | Status + action update wired |

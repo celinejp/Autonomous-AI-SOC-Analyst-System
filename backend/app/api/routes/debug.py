@@ -59,22 +59,20 @@ async def get_last_analysis(
         if not incident:
             raise HTTPException(status_code=404, detail="Incident not found")
         
-        # Build workflow trace from agent execution log
+        # Build workflow trace from agent execution log. incident.agent_execution_log
+        # holds AgentExecutionLogModel rows (attribute access), not dicts - and the
+        # schema has no per-agent failure/status tracking, so an agent either ran (and
+        # appears here) or the whole workflow raised before it got the chance to log.
         workflow_trace: Dict[str, Any] = {}
-        
+
         if incident.agent_execution_log:
             for log_entry in incident.agent_execution_log:
-                agent_name = log_entry.get("agent_name", "unknown")
-                
-                workflow_trace[agent_name] = {
-                    "status": "completed" if log_entry.get("status") != "failed" else "failed",
-                    "duration_ms": log_entry.get("duration_ms"),
-                    "timestamp": log_entry.get("timestamp"),
-                    "input_count": log_entry.get("input_count") or log_entry.get("logs_analyzed") or 0,
-                    "output_count": log_entry.get("output_count") or log_entry.get("alerts_generated") or 0,
-                    "errors": [] if log_entry.get("status") != "failed" else [log_entry.get("error", "Unknown error")],
-                    "llm_prompt_length": log_entry.get("llm_prompt_length"),
-                    "llm_response_length": log_entry.get("llm_response_length"),
+                workflow_trace[log_entry.agent_name] = {
+                    "duration_ms": log_entry.duration_ms,
+                    "timestamp": log_entry.timestamp.isoformat() if log_entry.timestamp else None,
+                    "tools_used": log_entry.tools_used or [],
+                    "reasoning": log_entry.reasoning,
+                    "output": log_entry.output_data or {},
                 }
         
         # Determine final output
@@ -88,18 +86,11 @@ async def get_last_analysis(
             "reason_for_failure": incident.false_positive_reason,
         }
         
-        # Check if any agent failed
-        agent_failures = [
-            name for name, trace in workflow_trace.items()
-            if trace.get("status") == "failed"
-        ]
-        
         return {
             "incident_id": incident_id,
             "workflow_trace": workflow_trace,
             "final_output": final_output,
-            "agent_failures": agent_failures,
-            "overall_status": "completed" if not agent_failures else "failed",
+            "overall_status": incident.status.value if incident.status else None,
             "analysis_timestamp": incident.created_at.isoformat() if incident.created_at else None,
         }
     except HTTPException:

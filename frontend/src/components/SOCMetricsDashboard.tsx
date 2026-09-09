@@ -85,12 +85,17 @@ export function SOCMetricsDashboard({ hours = 24 }: SOCMetricsDashboardProps) {
 
       <Card className="bg-gray-900 border-gray-800">
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium text-gray-400">AI Accuracy</CardTitle>
+          <CardTitle className="text-sm font-medium text-gray-400">Non-FP Rate</CardTitle>
           <Zap className="h-4 w-4 text-orange-400" />
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold text-orange-400">{aiAccuracy}%</div>
-          <p className="text-xs text-gray-500 mt-1">AI Detection Accuracy</p>
+          <p className="text-xs text-gray-500 mt-1">% of incidents not marked false positive</p>
+          <p className="text-xs text-yellow-500/80 mt-1">
+            Not an independent accuracy score - no incident has ever been reviewed/marked
+            as a false positive, so this reads 100% by construction. See README for
+            real, measured precision/recall.
+          </p>
         </CardContent>
       </Card>
     </div>

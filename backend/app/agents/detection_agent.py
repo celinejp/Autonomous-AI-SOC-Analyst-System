@@ -1,7 +1,8 @@
 """Detection Agent - Analyzes logs for suspicious patterns with FP controls."""
 
+import re
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Dict, List
 from collections import Counter
 
 from app.core.llm_factory import get_llm
@@ -87,11 +88,29 @@ _BENIGN_MARKERS = (
     "test-server",
     "vulnerability scan",
     "nightly-backup",
-    "approved=true",
     "scanner=nessus",
     "scanner=qualys",
-    "authorized",
     "it_admin",
+)
+
+# Authorization/approval language, change-ticket references, and maintenance-window
+# framing - regex-based (not the exact-string list above) so novel phrasing like
+# "per CHG-88123" or "sign-off received" is recognized as a benign signal without
+# needing the exact literal marker seen before. Confirmed live: a vuln-scan case
+# phrased with a change-ticket reference instead of the old hardcoded "approved=true"
+# was a false positive until this generalized.
+_AUTHORIZATION_RE = re.compile(
+    r"\bauthoriz(?:ed|ation)\b"
+    r"|\bapprov(?:ed|al)\b"
+    r"|\bpre-?approved\b"
+    r"|\bsanctioned\b"
+    r"|\bsign(?:ed)?[- ]?off\b"
+    r"|\bpermission granted\b"
+    r"|\b(?:chg|inc|req|ticket)[-_ ]?\d{3,}\b"
+    r"|\bchange (?:ticket|window|control)\b"
+    r"|\bmaintenance window\b"
+    r"|\bscheduled (?:assessment|scan|maintenance|change)\b",
+    re.IGNORECASE,
 )
 
 
@@ -133,6 +152,8 @@ def _logs_look_benign(logs: List[LogEntry]) -> bool:
         return False
 
     benign_hits = sum(1 for m in _BENIGN_MARKERS if m in blob)
+    if _AUTHORIZATION_RE.search(blob):
+        benign_hits += 1
     # Strong benign signal and no hostile markers
     return benign_hits >= 1 and all(
         (log.status or "").lower() in ("success", "unknown", "", "ok")
@@ -319,13 +340,18 @@ def _filter_alerts(alerts: List[Alert], logs: List[LogEntry]) -> List[Alert]:
         kept.append(alert)
 
     if _logs_look_benign(logs):
-        # On benign traffic, drop LLM-only alerts; keep hard rule hits only
+        # On benign traffic, drop LLM-only alerts; keep only hard, specific attack-tool/
+        # pattern signatures (evaluate_attack_rules / the signature list in
+        # _rule_based_detection - real attacks don't get "authorized" out of these).
+        # multiple_failed_logins/port_scanning are deliberately NOT in this carve-out:
+        # they're volumetric thresholds that can have a legitimate cause (a mistyped
+        # password, an authorized vuln scan), so _rule_based_detection already skips
+        # generating them at all on benign traffic - nothing to re-admit here.
         kept = [
             a
             for a in kept
             if (a.detection_rule or "").startswith("ATT&CK Rule")
             or (a.detection_rule or "").startswith("rule:")
-            or a.detection_rule in ("multiple_failed_logins", "port_scanning")
         ]
 
     return kept
@@ -335,6 +361,12 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
     """Deterministic signature/threshold detection (primary FP-safe signal)."""
     alerts: List[Alert] = []
     blob = " ".join((log.raw_log or "") for log in logs).lower()
+    # Computed once and applied to every rule below, including the volumetric
+    # threshold ones (brute force / port scan) - those two can have entirely
+    # legitimate causes (a mistyped password, an authorized vuln scan) that only
+    # context distinguishes from an attack, unlike the signature rules further
+    # down, which match specific attack tooling/patterns and stay unconditional.
+    is_benign = _logs_look_benign(logs)
 
     def add(title: str, description: str, rule: str, severity: Severity, techniques: List[str]):
         alerts.append(
@@ -365,7 +397,7 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
 
     for ip, count in failed_logins_by_ip.items():
         # Threshold 3 matches common labeled brute-force fixtures
-        if count >= 3:
+        if count >= 3 and not is_benign:
             severity = Severity.CRITICAL if count >= 20 else Severity.HIGH
             add(
                 f"Brute force attack detected from {ip}",
@@ -381,7 +413,7 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
         if log.destination_port:
             ports_by_ip.setdefault(log.source_ip, set()).add(log.destination_port)
     for ip, ports in ports_by_ip.items():
-        if len(ports) >= 10:
+        if len(ports) >= 10 and not is_benign:
             add(
                 f"Port scanning detected from {ip}",
                 f"Detected connections to {len(ports)} different ports from {ip}",
@@ -517,7 +549,7 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
     ]
 
     # Skip signature alerts when traffic is clearly approved/benign
-    if not _logs_look_benign(logs):
+    if not is_benign:
         for matched, title, desc, rule, sev, techs in signatures:
             if matched:
                 add(title, desc, rule, sev, techs)

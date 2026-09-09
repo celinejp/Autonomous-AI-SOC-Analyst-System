@@ -69,20 +69,42 @@ def get_sample_techniques() -> Dict[str, Any]:
 
 
 def extract_techniques(mitre_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract technique objects from MITRE data."""
+    """Extract technique objects from MITRE data.
+
+    Real STIX attack-pattern objects have no top-level "x_mitre_id" field - the
+    technique ID lives in external_references, in the entry whose source_name is
+    "mitre-attack" (confirmed against the live raw.githubusercontent.com feed,
+    which has 858 attack-pattern objects and zero "x_mitre_id" keys - this
+    previously silently matched nothing and fell back to the 8-item sample set
+    on every run, which is why Qdrant only ever had 8 techniques).
+    """
     techniques = []
-    
+
     for obj in mitre_data.get("objects", []):
-        if obj.get("type") == "attack-pattern" and obj.get("x_mitre_id"):
-            technique = {
-                "technique_id": obj.get("x_mitre_id"),
+        if obj.get("type") != "attack-pattern":
+            continue
+        if obj.get("revoked") or obj.get("x_mitre_deprecated"):
+            continue
+        technique_id = next(
+            (
+                ref.get("external_id")
+                for ref in obj.get("external_references", [])
+                if ref.get("source_name") == "mitre-attack" and ref.get("external_id")
+            ),
+            None,
+        )
+        if not technique_id:
+            continue
+        techniques.append(
+            {
+                "technique_id": technique_id,
                 "name": obj.get("name", ""),
                 "description": obj.get("description", "")[:1000],
                 "tactics": [phase.get("phase_name", "") for phase in obj.get("kill_chain_phases", [])],
                 "platforms": obj.get("x_mitre_platforms", []),
             }
-            techniques.append(technique)
-    
+        )
+
     logger.info(f"Extracted {len(techniques)} techniques")
     return techniques
 

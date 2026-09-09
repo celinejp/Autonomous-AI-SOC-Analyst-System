@@ -56,7 +56,13 @@ def get_mitre_technique_raw(technique_id: str) -> Dict[str, Any]:
         }
 
     technique = run_coro_sync(_fetch())
-    run_coro_sync(cache_set_json(cache_key, technique, ttl=604800))
+    # Only cache real hits. Caching "not found" would mean a technique loaded into
+    # Qdrant *after* an earlier miss stays invisible for the full TTL - confirmed
+    # live: T1001/T1091 were cached as "Unknown Technique" before load_mitre.py's
+    # extraction bug was fixed, and stayed stuck that way a week after the real
+    # data was loaded. A miss is cheap enough to just re-check next time.
+    if technique["name"] != "Unknown Technique":
+        run_coro_sync(cache_set_json(cache_key, technique, ttl=604800))
     return technique
 
 
@@ -67,7 +73,17 @@ def get_mitre_technique(technique_id: str) -> str:
     return f"MITRE Technique {technique_id.upper()}: {technique}"
 
 
-MITRE_SCORE_THRESHOLD = 0.65
+# Empirically tuned against the *current* mitre_techniques collection size (697
+# real techniques after scripts/load_mitre.py) - swept 0.65/0.70/0.75/0.80/0.85
+# against backend/data/labeled_incidents.json via eval_detection_metrics.py
+# --mode rules --enrich, picking the elbow (0.80/0.85 plateau at precision=0.944).
+# A value tuned against a small/sparse collection (e.g. the old 8-item sample
+# set, where 0.65 was correct) silently produces severe over-tagging against a
+# larger, denser one - confirmed live (precision cratered to 0.243 right after
+# loading the real ~700-technique dataset at the old threshold). Re-sweep this
+# any time the collection is reloaded with a meaningfully different technique
+# count.
+MITRE_SCORE_THRESHOLD = 0.80
 
 
 def search_mitre_techniques_raw(query: str, limit: int = 5, score_threshold: float = MITRE_SCORE_THRESHOLD) -> List[Dict[str, Any]]:

@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Loader2, Search, Activity, AlertCircle, Gauge, CheckCircle } from 'lucide-react';
+import { Loader2, Search, Activity, Gauge, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
 
 export default function DebugPage() {
@@ -85,16 +85,10 @@ export default function DebugPage() {
                 <div className="space-y-2 text-sm">
                   <div className="flex items-center gap-2">
                     <span className="text-gray-400">Status:</span>
-                    <span className={lastAnalysis.overall_status === 'completed' ? 'text-green-400' : 'text-red-400'}>
+                    <span className={lastAnalysis.overall_status !== 'in_progress' ? 'text-green-400' : 'text-yellow-400'}>
                       {lastAnalysis.overall_status}
                     </span>
                   </div>
-                  {lastAnalysis.agent_failures?.length > 0 && (
-                    <div className="flex items-center gap-2 text-red-400">
-                      <AlertCircle className="h-4 w-4" />
-                      Failures: {lastAnalysis.agent_failures.join(', ')}
-                    </div>
-                  )}
                   <div className="p-3 bg-gray-800 rounded-lg overflow-auto max-h-64">
                     <pre className="text-xs text-gray-300 whitespace-pre-wrap">
                       {JSON.stringify(lastAnalysis, null, 2)}

@@ -23,7 +23,7 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | Layer | Technology | Role |
 |-------|------------|------|
 | **Framework** | FastAPI | REST + SSE, async, OpenAPI docs |
-| **Routers** | 16 route modules | Health, incidents, ingest, stream, dashboard, metrics, organization, debug, synthetic, analysis, SIEM, response, semantic search, validation, performance |
+| **Routers** | 15 route modules | Health, incidents, ingest, stream, dashboard, metrics, organization, debug, synthetic, analysis, SIEM, response, semantic search, validation, performance |
 
 **Role:** HTTP API and streaming; orchestrates agents, DB, cache, and external services.
 
@@ -56,7 +56,7 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 ### DevOps / run
 | Layer | Technology | Role |
 |-------|------------|------|
-| **Containers** | Docker Compose | PostgreSQL, Redis, Qdrant, backend (frontend optional) |
+| **Containers** | Docker Compose | PostgreSQL, Redis, Qdrant, `backend` (API), `worker` (consumes the Redis Streams ingest queue and runs the LangGraph workflow - no `--reload`, restart it after any agent code change), `frontend` |
 | **Scripts** | `start.sh`, `stop.sh`, `init_db` | One-command start/stop and DB init |
 
 **Role:** Run full stack locally or in a lab.
@@ -69,8 +69,8 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 
 | Area | Backend | Frontend | Connection |
 |------|---------|----------|------------|
-| **Log ingestion** | `/api/ingest/analyze`, `/api/ingest/upload` | Ingest page (paste/upload, Analyze) | Full: UI → API → background workflow → DB → incident |
-| **Demo mode** | `POST /api/v1/incidents/stream` (SSE) | Ingest → Demo tab, Run Demo, stream viewer, redirect | Full: UI → stream → save incident → redirect |
+| **Log ingestion** | `/api/ingest/analyze`, `/api/ingest/upload` | Ingest page (paste/upload, Analyze) | Full: UI → API queues to Redis Streams → separate `worker` container runs the LangGraph workflow → DB → incident (UI polls status) |
+| **Demo mode** | `POST /api/v1/incidents/stream` (SSE) | Ingest → Demo tab, Run Demo, stream viewer, redirect | Full: UI → workflow runs inline in the `backend` process (not queued to the worker) → stream progress → save incident → redirect |
 | **Incidents** | CRUD + filters + `GET/PUT /incidents/:id/status`, `PATCH .../response-plan/actions/:id` | List, detail, filters, Mark Contained/Closed, response plan “Start Action” | Full: all actions call API and refresh data |
 | **Dashboard** | `/api/dashboard/stats` | Home: cards, top MITRE, quick links | Full |
 | **Metrics** | `/api/metrics/soc-kpis`, `/api/metrics/attack-coverage` | Home + Insights: SOC KPIs, ATT&CK coverage | Full |
@@ -97,11 +97,11 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 
 ### Implemented in pipeline (used by ingest/demo, not directly by UI)
 
-- **LangGraph workflow** (all 6 agents)
+- **LangGraph workflow** (all 6 agents) - runs in the `worker` container for queued ingestion, inline in `backend` for the Demo Mode SSE stream
 - **ATT&CK rules** (detection agent)
 - **Cloud log parsers** (AWS/Azure/GCP formats in ingest agent)
 - **IncidentService** (save from state to PostgreSQL)
-- **Redis** status during background analysis and stream
+- **Redis** - both the Streams queue the worker consumes and the incident-status cache the UI polls
 
 ---
 
@@ -116,33 +116,49 @@ Overview of the **tech stack and each component’s role**, what is **implemente
                                 │ HTTP + SSE (NEXT_PUBLIC_API_URL → backend)
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ BACKEND API (FastAPI)                                                    │
+│ BACKEND API (FastAPI, container: backend)                                │
 │   Connected to UI: health, incidents, ingest, stream (v1), dashboard,   │
 │                    metrics, organization, debug, synthetic, search,    │
 │                    integrations (SIEM), response actions, validation,  │
 │                    performance. Optional: analysis (alternate stream).  │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        ▼                       ▼                       ▼
-┌───────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ PostgreSQL    │     │ Redis           │     │ LangGraph        │
-│ (incidents,   │     │ (status, cache) │     │ (6 agents,       │
-│  reports,     │     │                 │     │  workflow)      │
-│  org profile) │     │                 │     │       │         │
-└───────────────┘     └─────────────────┘     └─────────┬─────────┘
-                                                      │
-                                                      ▼
-                                              ┌───────────────┐
-                                              │ LLM (Ollama/  │
-                                              │ OpenAI/Groq/  │
-                                              │ Anthropic)    │
-                                              └───────────────┘
-                                                      │
-                                              ┌───────┴───────┐
-                                              ▼               ▼
-                                        Qdrant (optional)   Tools
-                                        (semantic search)  (IP, MITRE, file/domain)
+│   Runs the LangGraph workflow INLINE only for the /v1/incidents/stream  │
+│   (Demo Mode SSE) path - everything else below is queued instead.       │
+└───────┬───────────────────────────────────────────┬─────────────────────┘
+        │ enqueue                                    │ direct
+        ▼                                             │
+┌───────────────────┐                                 │
+│ Redis Streams      │                                 │
+│ (ingest queue)      │                                 │
+└─────────┬───────────┘                                 │
+          ▼                                             │
+┌───────────────────────────────────┐                   │
+│ WORKER (container: worker)         │                   │
+│ Consumes the queue, runs the       │                   │
+│ LangGraph workflow (6 agents),     │                   │
+│ no --reload - restart after any    │                   │
+│ agent code change                  │◄──────────────────┘
+└───────────────┬─────────────────────┘
+                │
+        ┌───────┴───────────────────────┐
+        ▼                               ▼
+┌───────────────┐     ┌─────────────────┐
+│ PostgreSQL    │     │ Redis           │
+│ (incidents,   │     │ (queue, status, │
+│  reports,     │     │  cache)         │
+│  org profile) │     │                 │
+└───────────────┘     └─────────────────┘
+                │
+                ▼
+        ┌───────────────┐
+        │ LLM (Ollama/  │
+        │ OpenAI/Groq/  │
+        │ Anthropic)    │
+        └───────┬───────┘
+                │
+        ┌───────┴───────┐
+        ▼               ▼
+  Qdrant (optional)   Tools
+  (semantic search)  (IP, MITRE, file/domain)
 ```
 
 ---
@@ -159,8 +175,8 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | **UI ↔ Debug** | End-to-end | Last analysis by incident, agent traces |
 | **UI ↔ Synthetic** | End-to-end | Generate logs → fill textarea |
 | **Backend ↔ PostgreSQL** | Full | Incidents, reports, plans, org profile, agent logs, log entries |
-| **Backend ↔ Redis** | Full | Analysis status, API cache |
-| **Backend ↔ LangGraph** | Full | Ingest and stream routes run full workflow |
+| **Backend ↔ Redis** | Full | Ingest queue (Streams), analysis status, API cache |
+| **Backend ↔ LangGraph** | Full | Stream route runs the workflow inline; ingest route queues it for the `worker` container to run |
 | **Backend ↔ LLM** | Full | All agents use configured provider |
 | **Backend ↔ Qdrant** | Optional | Used by semantic/search tools when configured |
 | **UI ↔ Search** | End-to-end | Semantic incident search, MITRE technique search |

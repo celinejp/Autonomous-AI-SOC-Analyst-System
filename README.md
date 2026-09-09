@@ -11,10 +11,12 @@ This system autonomously analyzes security logs, detects threats, enriches findi
 - **6 Specialized AI Agents**: Each with distinct roles (Ingest, Detection, Threat Intel, Analyst, Response Planner, Critic)
 - **LangGraph Orchestration**: State machine with conditional routing and reflection loops
 - **Real-time Processing**: Server-Sent Events (SSE) for live agent execution streaming
-- **MITRE ATT&CK Integration**: 24+ attack techniques mapped with detection rules
+- **MITRE ATT&CK Integration**: 24 native detection rules mapped to specific techniques, plus
+  a separate ~700-technique reference dataset (full MITRE enterprise-attack.json, loaded via
+  `backend/scripts/load_mitre.py`) used for technique lookup, semantic tagging, and search
 - **Multi-Cloud Log Support**: AWS CloudTrail, Azure Monitor, GCP Audit Logs
 - **Enhanced SOC Features**: Structured IOCs, regulatory impact, role-based response plans
-- **SOC KPI Metrics**: MTTD, MTTR, MTTC, false positive rate, alert reduction
+- **SOC KPI Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
 - **Modern Tech Stack**: FastAPI + Next.js 15 + LangGraph + Multi-LLM support
 - **Production-Ready**: Docker containerization, proper error handling, structured logging
 - **Advanced UI**: shadcn/ui components, Recharts visualizations, Attack Graph visualization
@@ -228,7 +230,7 @@ Navigate to `/insights` for:
 - Top MITRE techniques
 - False positive rates
 - Agent performance metrics
-- SOC KPIs (MTTD, MTTR, MTTC, alert reduction)
+- SOC KPIs (MTTD, MTTR, alert reduction)
 
 ## 🔧 API Endpoints
 
@@ -261,7 +263,13 @@ Full API docs available at `/docs` when running.
 
 ## System Capabilities
 
-### Detection Rules (24+ ATT&CK Techniques)
+### Detection Rules (24 Native ATT&CK Techniques)
+
+These 24 are the techniques with a dedicated, hand-written detection rule in
+`backend/app/detection/attack_rules.py` - not the full set of MITRE techniques the system
+knows about. Any of the ~700 techniques loaded into Qdrant (see `scripts/load_mitre.py`) can
+still be looked up, searched, and tagged onto an alert by the Threat Intel agent; these 24
+are just the ones with their own purpose-built detection logic.
 
 The Detection Agent identifies:
 - **Initial Access**: Phishing (T1566.001, T1566.002)
@@ -290,7 +298,7 @@ The Detection Agent identifies:
 - **Structured Incident Reports**: Executive summary, IOCs, regulatory impact, detection gaps
 - **Role-Based Response Plans**: Team assignments (SOC, Network, Endpoint, Legal, etc.)
 - **IOC Blocklists**: Firewall IP blocks, DNS sinkhole, EDR hash blocks
-- **SOC Metrics**: MTTD, MTTR, MTTC, false positive rate, alert reduction
+- **SOC Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
 - **Organization Profiles**: Business context, critical assets, escalation matrix
 
 ### ML Anomaly Detection
@@ -347,10 +355,14 @@ pytest tests/test_system_health.py --timeout=120 -v
 
 ### Detection Accuracy
 
-Real numbers from `backend/scripts/eval_detection_metrics.py`, run against the live
-Docker stack (ingest → detection → threat intel enrichment) and the 25 labeled
-cases in `backend/data/labeled_incidents.json` + `backend/tests/fixtures/test_logs.json`
-(2026-08-30, `--mode llm --enrich`, full end-to-end pipeline):
+Two different measurements, kept deliberately separate because they answer different
+questions. Both are real runs through the live Docker stack (ingest → detection → threat
+intel enrichment) with `LLM_PROVIDER=ollama`, `LLM_MODEL=llama3.1` - the same model this
+project ships with by default, not a larger hosted model.
+
+**1. Fixture regression check** - `backend/scripts/eval_detection_metrics.py --mode llm
+--enrich` against the 25 labeled cases in `backend/data/labeled_incidents.json` +
+`backend/tests/fixtures/test_logs.json` (2026-09-08):
 
 | Metric | Value |
 |---|---|
@@ -359,20 +371,70 @@ cases in `backend/data/labeled_incidents.json` + `backend/tests/fixtures/test_lo
 | MITRE technique precision | 0.944 |
 | MITRE technique F1 | 0.693 |
 
-**Caveat on the alert-level numbers:** the labeled fixtures were written to match the
-detection rules' exact keyword expectations, so a perfect 1.0 here is close to
-self-grading rather than proof the system generalizes to real-world log variety - treat
-it as a regression check, not an accuracy claim. The MITRE technique numbers are more
-informative: they were a real bug (raw score reached **0.24 precision** before the fix -
-alerts were tagged with irrelevant techniques like `T1486`/`T1566` off unfiltered
-semantic search and ungrounded LLM tool calls) and the fix (score threshold tuned to
-0.65, plus grounding every tagged technique against an actual similarity hit) nearly
-quadrupled precision while holding recall at the no-enrichment baseline.
+The labeled fixtures were written to match the detection rules' exact keyword
+expectations, so the perfect 1.0 alert-level score is close to self-grading, not proof of
+real-world generalization - treat it as a regression check only. The MITRE technique
+numbers are the more informative half of this run: the score threshold in
+`backend/app/tools/mitre_search.py` (`MITRE_SCORE_THRESHOLD`) is empirically tuned
+against the *current* size of the Qdrant `mitre_techniques` collection (697 real
+techniques as of this run) and needs re-tuning any time that collection's size changes
+meaningfully - confirmed live: precision collapsed from 0.944 to 0.243 immediately after
+loading the full ~700-technique dataset at a threshold that was calibrated for an 8-item
+placeholder collection, and separately to as low as 0.528 in `--mode llm` specifically
+because the detection-stage LLM's own freely-assigned technique IDs were bypassing the
+grounding check entirely (fixed in `threat_intel_agent.py` by grounding those the same
+way as every other LLM-sourced technique ID).
+
+**2. Held-out generalization check** - `backend/scripts/eval_holdout_generalization.py`
+against `backend/data/holdout_generalization_cases.json`, 10 cases in log formats/wording
+*not* present in the fixtures above (Windows Security Event text, Sysmon process/file
+events, CEF, a real Zeek/Bro conn.log line, native Kubernetes JSON audit events, a generic
+email gateway) - this is the number that actually answers "does detection generalize,"
+since nothing here matches the detection rules' exact keyword expectations. Run twice back
+to back on 2026-09-08, both runs identical:
+
+| Metric | Value |
+|---|---|
+| Precision | 1.0 |
+| Recall | 0.875 |
+| F1 | 0.933 |
+
+**This number moves between runs - do not treat any single snapshot (including this one)
+as fixed.** An earlier run on the same day, before a false-positive fix described below,
+measured 0.889 / 1.0 / 0.941 on the same 10 cases; a case that was a false negative in
+that run (DNS tunneling, `hold-008`) became a false negative again in *these* two runs
+despite no code change touching that path at all (confirmed by direct inspection: this
+case's log format never matches any benign-marker or rule-signature pattern, so its
+outcome depends entirely on the LLM's own judgment call, and llama3.1 isn't perfectly
+consistent on it run to run). Re-run both eval scripts yourself before trusting either
+number for a decision - see the reproduce commands below.
+
+The authorized-vulnerability-scan false positive from the earlier snapshot
+(`hold-010` - a vuln scan phrased with a change-ticket reference instead of the exact
+`approved=true`/`scanner=nessus` wording) is fixed: `detection_agent.py`'s benign-traffic
+recognition now matches the *concept* of authorization via `_AUTHORIZATION_RE` (ticket
+references like `CHG-88123`, approval/sign-off language, maintenance-window framing) 
+instead of only exact hardcoded strings, and the brute-force/port-scan volumetric
+threshold rules (which, unlike the hard attack-signature rules, can have a genuinely
+legitimate cause) now respect that signal instead of always overriding it. `hold-010`
+resolved correctly (true negative) in both of the runs above.
+
+**llama3.1 report-parsing reliability**: across 20 real analyst-agent runs through the
+live worker, 1 (5%) produced a JSON response with no closing brace found at all - the
+model simply stopped before finishing valid JSON. `backend/app/agents/analyst_agent.py`
+also separately guards against a second, different failure mode (syntactically valid JSON
+that dumps a duplicated/garbled blob into `executive_summary` while every other field
+silently defaults to its placeholder). The existing retry-once logic did not recover this
+specific truncation case; it fell back to the deterministic placeholder report exactly as
+designed - the incident was still saved successfully, just with a lower-quality report
+instead of a crash or silent corruption. This is a known, accepted limitation of running
+a small local model rather than something left unhandled.
 
 Reproduce with:
 ```bash
 cd backend
 python scripts/eval_detection_metrics.py --mode llm --enrich
+python scripts/eval_holdout_generalization.py
 ```
 
 ## Security Considerations

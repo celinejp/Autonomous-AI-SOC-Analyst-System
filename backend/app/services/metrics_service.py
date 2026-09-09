@@ -150,7 +150,15 @@ class MetricsService:
 
             # AI metrics (simplified - assume all incidents go through AI)
             ai_triage_rate = 1.0 if incidents_count > 0 else 0.0
-            ai_accuracy = true_positive_rate  # Assume AI accuracy = true positive rate
+            # NOT an independently measured accuracy score: true_positive_rate is the
+            # fraction of incidents NOT marked IncidentStatus.FALSE_POSITIVE, and nothing
+            # in the UI currently offers a way to mark one - so this is structurally
+            # always 1.0 until that review workflow exists, regardless of whether the
+            # AI's detections were actually correct. The frontend labels/caveats this
+            # honestly (see SOCMetricsDashboard.tsx) rather than showing "AI Accuracy".
+            # For an independently measured number, see the eval scripts in
+            # backend/scripts/eval_detection_metrics.py and README.md.
+            ai_accuracy = true_positive_rate
 
             # Alert reduction (simplified - assume 10:1 ratio for now)
             # In production, would count raw log entries vs incidents
