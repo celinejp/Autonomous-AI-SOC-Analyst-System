@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
@@ -14,11 +14,8 @@ from app.database.postgres import get_db
 from app.database.redis_client import get_redis_client
 from app.core.metrics import (
     IncidentMetrics,
-    ValidationResult,
-    AggregateMetrics,
     calculate_incident_metrics,
     validate_against_ground_truth,
-    calculate_aggregate_metrics,
 )
 from app.core.logging import get_logger
 
@@ -73,9 +70,18 @@ class AggregateResponse(BaseModel):
     evaluated_at: Optional[str] = None
 
 
+_RESULTS_DIR = Path(__file__).parent.parent.parent.parent / "tests" / "results"
+# Most complete/real run first: eval_detection_metrics.py names its output
+# real_accuracy_report{_llm}{_enrich}.json depending on --mode/--enrich flags,
+# so all four combinations need to be checked, not just the two that happened
+# to exist when this list was first written - confirmed live: the endpoint
+# was silently blind to the standard `--mode llm --enrich` run's output
+# (real_accuracy_report_llm_enrich.json) because it wasn't in this list.
 REAL_METRICS_PATHS = [
-    Path(__file__).parent.parent.parent / "tests" / "results" / "real_accuracy_report_llm.json",
-    Path(__file__).parent.parent.parent / "tests" / "results" / "real_accuracy_report.json",
+    _RESULTS_DIR / "real_accuracy_report_llm_enrich.json",
+    _RESULTS_DIR / "real_accuracy_report_llm.json",
+    _RESULTS_DIR / "real_accuracy_report_enrich.json",
+    _RESULTS_DIR / "real_accuracy_report.json",
 ]
 
 

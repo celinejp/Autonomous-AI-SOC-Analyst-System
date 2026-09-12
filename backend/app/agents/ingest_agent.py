@@ -3,11 +3,13 @@
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from app.agents.base import BaseAgent
+from app.core.logging import get_logger
 from app.models.agent_state import AgentState
-from app.models.log_entry import LogEntry, LogFormat, LogSource, LogSourceType
+from app.models.log_entry import LogEntry, LogSource, LogSourceType
+
+logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are a security log ingestion agent. Your role is to parse and normalize security logs from various sources into a unified schema.
 
@@ -56,7 +58,7 @@ async def ingest_agent(state: AgentState) -> AgentState:
             if log_entry:
                 normalized_logs.append(log_entry)
         except Exception as e:
-            # Skip malformed logs but log the error
+            logger.warning("ingest_agent: skipping malformed log line", error=str(e), raw_log=raw_log[:200])
             continue
 
     state["logs"] = normalized_logs

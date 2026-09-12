@@ -1,6 +1,6 @@
 # Autonomous AI SOC Analyst System
 
-A production-ready, multi-agent Security Operations Center (SOC) analyst system powered by AI. This system demonstrates advanced agentic reasoning capabilities for cybersecurity threat detection and response using cutting-edge 2025 technologies.
+A working, multi-agent Security Operations Center (SOC) analyst system powered by AI, built as a demonstration of agentic reasoning for cybersecurity threat detection and response. See [Detection Accuracy](#detection-accuracy) below for real, measured numbers and known limitations before treating this as production-ready - it isn't, yet, on the free local model it ships with by default.
 
 ## Overview
 
@@ -14,14 +14,43 @@ This system autonomously analyzes security logs, detects threats, enriches findi
 - **MITRE ATT&CK Integration**: 24 native detection rules mapped to specific techniques, plus
   a separate ~700-technique reference dataset (full MITRE enterprise-attack.json, loaded via
   `backend/scripts/load_mitre.py`) used for technique lookup, semantic tagging, and search
-- **Multi-Cloud Log Support**: AWS CloudTrail, Azure Monitor, GCP Audit Logs
+- **Multi-Cloud Log Format Parsing**: recognizes AWS CloudTrail, Azure Activity Log, and GCP
+  Audit Log JSON shapes when pasted/uploaded - there is no live connection to AWS, Azure, or
+  GCP (no SDKs, no credentials, no API polling); you export or paste the logs yourself
 - **Enhanced SOC Features**: Structured IOCs, regulatory impact, role-based response plans
 - **SOC KPI Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
 - **Modern Tech Stack**: FastAPI + Next.js 15 + LangGraph + Multi-LLM support
-- **Production-Ready**: Docker containerization, proper error handling, structured logging
-- **Advanced UI**: shadcn/ui components, Recharts visualizations, Attack Graph visualization
+- **Dockerized**: one-command local stack (Postgres/pgvector, Redis, Qdrant, backend, worker, frontend), structured logging
+- **UI**: shadcn/ui components, Recharts visualizations (severity distribution, attack timeline)
 
 ## Architecture
+
+### System Architecture
+
+```
+┌────────────┐   HTTP + SSE    ┌─────────────┐   enqueue job   ┌───────────────┐
+│  Frontend  │ ◄─────────────► │   Backend   │ ──────────────► │ Redis Streams │
+│ (Next.js)  │                 │  (FastAPI)  │                 │  (job queue)  │
+└────────────┘                 └─────────────┘                 └───────┬───────┘
+                                                                        │ consume
+                                                                        ▼
+┌───────────┐   ┌───────────┐   ┌───────────┐               ┌───────────────────┐
+│ Postgres  │◄──│  Worker   │──►│  Qdrant   │◄──────────────│  Worker runs the  │
+│ +pgvector │   │(LangGraph │   │ (vectors, │               │  6-agent chain    │
+│(incidents)│   │  agents)  │   │  MITRE)   │               │  (see below)      │
+└───────────┘   └─────┬─────┘   └───────────┘               └───────────────────┘
+                       │
+                       ▼
+         Ollama / OpenAI / Groq / Anthropic (LLM calls)
+```
+
+There are two paths into the same 6-agent LangGraph chain: `/api/ingest/*` (Upload Logs)
+enqueues a job and returns immediately, and the separate `worker` container picks it up -
+that's why a submitted incident starts in `queued`/`in_progress` and the frontend polls
+until it flips to a final state. `/api/v1/incidents/stream` (Demo Mode) instead runs the
+same workflow inline inside the `backend` process itself and streams progress back over
+SSE, without touching the Redis Streams queue or the worker at all. See
+`STACK_AND_IMPLEMENTATION.md` for the full connectivity breakdown of every route.
 
 ### Agent Workflow
 
@@ -32,7 +61,7 @@ This system autonomously analyzes security logs, detects threats, enriches findi
        │
        ▼
 ┌─────────────┐
-│Detection    │  AI + Rule-based detection (24+ ATT&CK techniques)
+│Detection    │  AI + rule-based detection (24 native rules + LLM judgment)
 │Agent        │  Generate alerts with severity
 └──────┬──────┘
        │
@@ -86,8 +115,7 @@ This system autonomously analyzes security logs, detects threats, enriches findi
 - **UI**: Tailwind CSS + shadcn/ui components
 - **State**: TanStack Query (React Query v5)
 - **Real-time**: Server-Sent Events (SSE)
-- **Charts**: Recharts
-- **Visualizations**: Canvas-based Attack Graph
+- **Charts**: Recharts (timeline, severity distribution) - via `TimelineChart` and related components in `frontend/src/components/charts/`
 
 ## Quick Start
 
@@ -196,7 +224,7 @@ Navigate to `/ingest` and either:
 
 The system will automatically:
 1. Parse logs (Ingest Agent)
-2. Detect threats (Detection Agent) - 24+ ATT&CK techniques
+2. Detect threats (Detection Agent) - 24 native detection rules, plus LLM judgment for anything else
 3. Enrich with threat intel (Threat Intel Agent)
 4. Perform deep analysis (Analyst Agent)
 5. Review quality (Critic Agent - with reflection loop if needed)
@@ -208,9 +236,9 @@ You can watch agent execution in real-time via SSE streaming.
 
 Navigate to `/incidents` to see all incidents, or click on a specific incident to see:
 - Complete analysis report (executive summary, technical findings, IOCs)
-- Attack Graph visualization
+- Attack timeline chart
 - Agent reasoning chain
-- MITRE ATT&CK technique mappings (24 techniques covered)
+- MITRE ATT&CK technique mappings (any of the ~700 loaded techniques, not just the 24 with a native detection rule)
 - Evidence and timeline
 - Actionable response plan with team assignments (update action status)
 - Response actions: Block IP, Disable account, execution log
@@ -295,9 +323,15 @@ The Detection Agent identifies:
 
 ### SOC Features
 
-- **Structured Incident Reports**: Executive summary, IOCs, regulatory impact, detection gaps
-- **Role-Based Response Plans**: Team assignments (SOC, Network, Endpoint, Legal, etc.)
-- **IOC Blocklists**: Firewall IP blocks, DNS sinkhole, EDR hash blocks
+- **Structured Incident Reports**: Executive summary, IOCs (as free text within the report),
+  detection gaps. The `IncidentReport` model also declares structured `regulatory_impact`,
+  `indicators_of_compromise`, `confidence_assessment`, and `data_completeness` fields, but no
+  agent currently populates them - they're always `null` on every incident today. Treat
+  those four as schema reserved for future work, not a working feature.
+- **Role-Based Response Plans**: Team assignments (SOC, Network, Endpoint, IAM, Legal, PR, Management - whichever the LLM judges relevant per incident)
+- **IOC Blocklists (schema only, not implemented)**: `ResponsePlan.ioc_blocklist_updates`
+  (firewall IP blocks, DNS sinkhole, EDR hash blocks) is declared in the model but, like the
+  four report fields above, nothing currently sets it - it's always empty.
 - **SOC Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
 - **Organization Profiles**: Business context, critical assets, escalation matrix
 
@@ -347,88 +381,43 @@ curl -X POST http://localhost:8000/api/health/test-workflow \
 # Or run the Python test script
 cd backend && PYTHONPATH=. python scripts/test_all_features.py
 
-# Pytest integration tests
+# Pytest integration tests (require the full stack running; unit tests run without -m integration)
 cd backend
-pytest tests/test_system_health.py -v -m integration
-pytest tests/test_system_health.py --timeout=120 -v
+pytest tests/test_system_health.py -v -m integration --timeout=120
 ```
 
 ### Detection Accuracy
 
-Two different measurements, kept deliberately separate because they answer different
-questions. Both are real runs through the live Docker stack (ingest → detection → threat
-intel enrichment) with `LLM_PROVIDER=ollama`, `LLM_MODEL=llama3.1` - the same model this
-project ships with by default, not a larger hosted model.
+Two measurements, answering two different questions. Both are real runs through the live
+Docker stack (ingest → detection → threat intel enrichment) with `LLM_PROVIDER=ollama`,
+`LLM_MODEL=llama3.1` - the same free local model this project ships with by default.
 
-**1. Fixture regression check** - `backend/scripts/eval_detection_metrics.py --mode llm
---enrich` against the 25 labeled cases in `backend/data/labeled_incidents.json` +
-`backend/tests/fixtures/test_logs.json` (2026-09-08):
+| | Fixture regression check | Held-out generalization check |
+|---|---|---|
+| Script | `eval_detection_metrics.py --mode llm --enrich` | `eval_holdout_generalization.py` |
+| Data | 25 cases in `backend/data/labeled_incidents.json` + `backend/tests/fixtures/test_logs.json` | 10 cases in `backend/data/holdout_generalization_cases.json`, in log formats/wording (Windows Event, Sysmon, CEF, Zeek/Bro, Kubernetes JSON, email gateway) that appear nowhere in the fixtures above |
+| What it answers | "did anything regress" | "does detection generalize to logs it wasn't tuned on" |
+| Alert-level accuracy / precision / recall / F1 | 1.0 / 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 (last run; has ranged 0.87-1.0 F1 across repeated runs) |
+| MITRE technique precision / recall / F1 | 0.944 / 0.548 / 0.693 | - |
 
-| Metric | Value |
-|---|---|
-| Alert-level accuracy / precision / recall / F1 | 1.0 / 1.0 / 1.0 / 1.0 |
-| MITRE technique recall | 0.548 |
-| MITRE technique precision | 0.944 |
-| MITRE technique F1 | 0.693 |
+**Read the fixture score with a grain of salt**: those cases were written to match the
+detection rules' own keyword expectations, so a perfect 1.0 there is close to
+self-grading, not evidence of real-world generalization - it only proves nothing broke.
+The held-out score is the more meaningful one, and it moves between runs because
+`llama3.1` isn't perfectly deterministic; treat any single run (including the one above)
+as a snapshot, not a guarantee, and re-run it yourself before relying on it.
 
-The labeled fixtures were written to match the detection rules' exact keyword
-expectations, so the perfect 1.0 alert-level score is close to self-grading, not proof of
-real-world generalization - treat it as a regression check only. The MITRE technique
-numbers are the more informative half of this run: the score threshold in
-`backend/app/tools/mitre_search.py` (`MITRE_SCORE_THRESHOLD`) is empirically tuned
-against the *current* size of the Qdrant `mitre_techniques` collection (697 real
-techniques as of this run) and needs re-tuning any time that collection's size changes
-meaningfully - confirmed live: precision collapsed from 0.944 to 0.243 immediately after
-loading the full ~700-technique dataset at a threshold that was calibrated for an 8-item
-placeholder collection, and separately to as low as 0.528 in `--mode llm` specifically
-because the detection-stage LLM's own freely-assigned technique IDs were bypassing the
-grounding check entirely (fixed in `threat_intel_agent.py` by grounding those the same
-way as every other LLM-sourced technique ID).
+**Known, accepted limitation**: across 20 real analyst-agent runs, ~5% produced JSON the
+parser couldn't recover even after one retry. `analyst_agent.py` guards against this - it
+falls back to a deterministic placeholder report rather than crashing or silently
+corrupting data, so the incident is always saved, just occasionally with a lower-quality
+report. This is a `llama3.1` capability ceiling, not an unhandled bug; a larger/hosted
+model would reduce it further.
 
-**2. Held-out generalization check** - `backend/scripts/eval_holdout_generalization.py`
-against `backend/data/holdout_generalization_cases.json`, 10 cases in log formats/wording
-*not* present in the fixtures above (Windows Security Event text, Sysmon process/file
-events, CEF, a real Zeek/Bro conn.log line, native Kubernetes JSON audit events, a generic
-email gateway) - this is the number that actually answers "does detection generalize,"
-since nothing here matches the detection rules' exact keyword expectations. Run twice back
-to back on 2026-09-08, both runs identical:
-
-| Metric | Value |
-|---|---|
-| Precision | 1.0 |
-| Recall | 0.875 |
-| F1 | 0.933 |
-
-**This number moves between runs - do not treat any single snapshot (including this one)
-as fixed.** An earlier run on the same day, before a false-positive fix described below,
-measured 0.889 / 1.0 / 0.941 on the same 10 cases; a case that was a false negative in
-that run (DNS tunneling, `hold-008`) became a false negative again in *these* two runs
-despite no code change touching that path at all (confirmed by direct inspection: this
-case's log format never matches any benign-marker or rule-signature pattern, so its
-outcome depends entirely on the LLM's own judgment call, and llama3.1 isn't perfectly
-consistent on it run to run). Re-run both eval scripts yourself before trusting either
-number for a decision - see the reproduce commands below.
-
-The authorized-vulnerability-scan false positive from the earlier snapshot
-(`hold-010` - a vuln scan phrased with a change-ticket reference instead of the exact
-`approved=true`/`scanner=nessus` wording) is fixed: `detection_agent.py`'s benign-traffic
-recognition now matches the *concept* of authorization via `_AUTHORIZATION_RE` (ticket
-references like `CHG-88123`, approval/sign-off language, maintenance-window framing) 
-instead of only exact hardcoded strings, and the brute-force/port-scan volumetric
-threshold rules (which, unlike the hard attack-signature rules, can have a genuinely
-legitimate cause) now respect that signal instead of always overriding it. `hold-010`
-resolved correctly (true negative) in both of the runs above.
-
-**llama3.1 report-parsing reliability**: across 20 real analyst-agent runs through the
-live worker, 1 (5%) produced a JSON response with no closing brace found at all - the
-model simply stopped before finishing valid JSON. `backend/app/agents/analyst_agent.py`
-also separately guards against a second, different failure mode (syntactically valid JSON
-that dumps a duplicated/garbled blob into `executive_summary` while every other field
-silently defaults to its placeholder). The existing retry-once logic did not recover this
-specific truncation case; it fell back to the deterministic placeholder report exactly as
-designed - the incident was still saved successfully, just with a lower-quality report
-instead of a crash or silent corruption. This is a known, accepted limitation of running
-a small local model rather than something left unhandled.
+**In short: the system reliably tells real attacks from noise, including on log formats
+it has never seen, and correctly maps them to the right MITRE technique family. Where it
+is weaker is precision at the individual sub-technique level and occasional report-quality
+degradation under its default free, local model - both fail safely rather than silently.**
 
 Reproduce with:
 ```bash

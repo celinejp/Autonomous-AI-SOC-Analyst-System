@@ -1,14 +1,12 @@
 """SOC KPI metrics service."""
 
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Dict
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, and_
 
-from app.database.repositories import IncidentRepository
 from app.database.models import IncidentModel, AlertModel, IncidentStatus
-from app.models.incident import Severity
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)

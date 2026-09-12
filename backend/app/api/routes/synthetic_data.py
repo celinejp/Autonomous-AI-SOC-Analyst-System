@@ -1,9 +1,8 @@
 """Synthetic Data Generation and Model Distillation endpoints."""
 
 from fastapi import APIRouter, HTTPException, Depends, Body, BackgroundTasks
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import json
-import asyncio
 from pathlib import Path
 from datetime import datetime
 

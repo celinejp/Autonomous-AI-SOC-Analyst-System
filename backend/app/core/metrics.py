@@ -1,9 +1,8 @@
 """Quality metrics calculation for AI agent outputs."""
 
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
-import json
 
 
 class IncidentMetrics(BaseModel):

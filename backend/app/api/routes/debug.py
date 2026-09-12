@@ -1,15 +1,13 @@
 """Debug endpoints for inspecting agent execution."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Dict, Any, Optional, List
-from datetime import datetime
+from typing import Dict, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from app.database.postgres import get_db
 from app.database.repositories import IncidentRepository
 from app.database.models import AgentExecutionLogModel
-from app.models.incident import Incident
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)

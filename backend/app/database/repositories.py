@@ -2,18 +2,13 @@
 
 from typing import List, Optional
 from datetime import datetime, timedelta
-from uuid import UUID
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.database.models import (
-    IncidentModel, AlertModel, MITRETechniqueModel, IncidentReportModel,
-    ResponsePlanModel, AgentExecutionLogModel, LogEntryModel
-)
+from app.database.models import IncidentModel, LogEntryModel
 from app.models.incident import Incident, Alert, MITRETechnique, IncidentReport, ResponsePlan, IncidentStatus, Severity
-from app.models.log_entry import LogEntry
 
 
 class IncidentRepository:

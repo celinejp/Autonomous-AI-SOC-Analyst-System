@@ -7,10 +7,8 @@ from app.core.llm_factory import get_llm
 from app.core.logging import get_logger
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-from app.agents.base import BaseAgent
-from app.core.config import settings
 from app.models.agent_state import AgentState
-from app.models.incident import IncidentReport, Severity
+from app.models.incident import IncidentReport
 from app.tools.similarity_search import search_similar_incidents
 from app.tools.ip_lookup import lookup_ip
 
@@ -145,9 +143,6 @@ Use tools to search for similar past incidents if helpful."""
         except _ReportParseError as e2:
             logger.warning("analyst_agent: retry also failed to parse, using fallback report: %s", e2)
             incident_report = _fallback_report(retry_response.content, alerts, logs)
-
-    # Update highest severity
-    max_severity = max((a.severity for a in alerts), key=lambda s: Severity.__members__.get(s.value, 0))
 
     state["incident_report"] = incident_report
     state["agent_execution_log"].append({

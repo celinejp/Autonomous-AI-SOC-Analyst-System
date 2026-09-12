@@ -37,36 +37,6 @@ Summary of what is **implemented and connected** in the Autonomous AI SOC Analys
 
 ---
 
-## Optional / future
-
-- **Student model:** Set `STUDENT_MODEL_NAME` when a distilled model is available; synthetic comparison will use it.
-- **E2E:** Run `./test_all_features.sh` or `backend/scripts/test_all_features.py` for full flow.
-
----
-
-## File / Docs Layout
-
-- **Root:** `README.md`, `MITRE_ATTACK_EXPLAINED.md`, `IMPLEMENTATION_STATUS.md`, `start.sh`, `stop.sh`, `test_all_features.sh`, `docker-compose.yml`, etc.
-- **Docs:** `docs/TESTING_GUIDE.md`
-- **Frontend:** App Router pages under `frontend/src/app/`; hooks, components, `lib/api.ts`.
-- **Backend:** FastAPI app, routes, agents, services, DB.
-
----
-
-## Quick reference: API ↔ UI
-
-| API area | Used by frontend? | Where |
-|----------|-------------------|--------|
-| `/api/health/*` | Yes | Health page |
-| `/api/incidents/*` | Yes | Incidents list, Incident detail, status polling |
-| `/api/ingest/*` | Yes | Ingest (upload + analyze) |
-| `/api/v1/incidents/stream` | Yes | Demo mode (fetch + SSE) |
-| `/api/dashboard/*` | Yes | Home, Insights |
-| `/api/metrics/*` | Yes | Home, Insights (SOC KPIs, attack coverage) |
-| `/api/organization/*` | Yes | Settings page |
-| `/api/debug/*` | Yes | Debug page (last analysis, traces, validation, performance) |
-| `/api/synthetic/*` | Yes | Ingest (Generate synthetic) |
-| `/api/v1/incidents/search/semantic`, MITRE search | Yes | Search page |
-| `/api/siem/*` | Yes | Integrations page |
-| `/api/response/*` | Yes | Incident page (response actions card) |
-| `/api/v1/validate/*`, `/api/v1/performance/*` | Yes | Debug page |
+For the full tech-stack breakdown, connectivity diagram, and per-route wiring detail
+(including the `Optional / future` items and where every route is used in the frontend),
+see `STACK_AND_IMPLEMENTATION.md` instead of duplicating that table here.

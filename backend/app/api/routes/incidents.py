@@ -1,25 +1,20 @@
 """Incident management endpoints."""
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query, Response
 from typing import List, Optional
 from datetime import datetime
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from fastapi import Query, Response
-from fastapi.responses import JSONResponse
-
 from sqlalchemy import select
+
 from app.database.postgres import get_db
 from app.database.repositories import IncidentRepository
 from app.database.models import ResponsePlanModel
 from app.models.incident import Incident, IncidentStatus, Severity
 from app.core.logging import get_logger
-from app.core.cache import cache_response, cache_key
+from app.core.cache import cache_response
 from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
 
 logger = get_logger(__name__)
 

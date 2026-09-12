@@ -4,7 +4,6 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from app.core.logging import get_logger
-from app.core.config import settings
 
 logger = get_logger(__name__)
 

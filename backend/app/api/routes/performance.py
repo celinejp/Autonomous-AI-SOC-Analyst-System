@@ -1,7 +1,6 @@
 """Performance monitoring endpoint."""
 
-from fastapi import APIRouter, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request
 from typing import Dict, Any
 import time
 from datetime import datetime

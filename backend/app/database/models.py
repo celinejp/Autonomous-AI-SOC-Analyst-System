@@ -2,9 +2,8 @@
 
 from datetime import datetime
 from typing import Dict, Any
-import json
 
-from sqlalchemy import Column, String, DateTime, Float, Integer, Text, ForeignKey, JSON, Enum as SQLEnum, Boolean
+from sqlalchemy import Column, String, DateTime, Float, Integer, Text, ForeignKey, JSON, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import relationship

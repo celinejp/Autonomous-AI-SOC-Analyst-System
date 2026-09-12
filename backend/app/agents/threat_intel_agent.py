@@ -1,13 +1,10 @@
 """Threat Intel Agent - Retrieves MITRE ATT&CK and threat intelligence context."""
 
 from datetime import datetime
-from typing import Any, Dict, List
 
 from app.core.llm_factory import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agents.base import BaseAgent
-from app.core.config import settings
 from app.models.agent_state import AgentState
 from app.tools.mitre_search import (
     MITRE_SCORE_THRESHOLD,

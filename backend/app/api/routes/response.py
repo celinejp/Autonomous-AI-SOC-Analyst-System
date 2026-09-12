@@ -1,11 +1,9 @@
 """Automated Response Actions API endpoints."""
 
-from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Dict, Any
+from fastapi import APIRouter, HTTPException
+from typing import Dict, Any
 from pydantic import BaseModel
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.postgres import get_db
 from app.services.response_service import get_response_executor
 
 router = APIRouter()

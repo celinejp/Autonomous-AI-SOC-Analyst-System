@@ -1,6 +1,6 @@
 """ATT&CK-native detection rules library."""
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from app.models.log_entry import LogEntry
 
 
@@ -360,6 +360,7 @@ def _evaluate_threshold_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -
 
     # Group by group_by fields
     from collections import defaultdict
+    from datetime import timedelta
     groups = defaultdict(list)
 
     for log in logs:
@@ -367,10 +368,18 @@ def _evaluate_threshold_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -
             key = tuple(getattr(log, gb, None) for gb in pattern.get("group_by", []))
             groups[key].append(log)
 
-    # Check if any group exceeds threshold within window
+    # Check if any group has `count` events within a `window_seconds` span -
+    # not just `count` events anywhere in the whole log set, however far apart.
+    window = timedelta(seconds=window_seconds)
     for group_logs in groups.values():
-        if len(group_logs) >= count:
-            matched.extend(group_logs)
+        ordered = sorted(group_logs, key=lambda l: l.timestamp)
+        start = 0
+        for end in range(len(ordered)):
+            while ordered[end].timestamp - ordered[start].timestamp > window:
+                start += 1
+            if end - start + 1 >= count:
+                matched.extend(ordered)
+                break
 
     return matched
 

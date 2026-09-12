@@ -34,7 +34,7 @@ def get_llm(
     provider = provider or settings.llm_provider.lower()
     model_name = model_name or settings.llm_model
     
-    logger.info(f"Initializing LLM", provider=provider, model=model_name)
+    logger.info("Initializing LLM", provider=provider, model=model_name)
     
     if provider == "ollama":
         return _get_ollama_llm(model_name, temperature)

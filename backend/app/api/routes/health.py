@@ -2,15 +2,13 @@
 
 import asyncio
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from app.database.postgres import get_db
 from app.database.redis_client import get_redis_client
 from app.database.vector_store import get_qdrant_client
 from app.core.llm_factory import get_llm

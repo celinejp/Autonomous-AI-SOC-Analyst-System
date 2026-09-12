@@ -5,10 +5,8 @@ from typing import List, Dict, Any
 from datetime import datetime
 import asyncio
 
-from app.core.llm_factory import get_llm
 from app.core.config import settings
 from app.orchestrator.langgraph_workflow import run_workflow
-from app.models.agent_state import AgentState
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -21,11 +19,8 @@ async def generate_synthetic_incident(teacher_logs: List[str]) -> Dict[str, Any]
     This is the "teacher" in knowledge distillation - generates perfect outputs.
     """
     try:
-        # Use teacher model (preferably Claude, fallback to configured LLM)
-        # For now, use configured LLM (can be switched to Claude if available)
-        teacher_llm = get_llm(temperature=0.1)  # Low temperature for consistent output
-        
-        # Run full workflow to get complete analysis
+        # Run full workflow to get complete analysis. Each agent gets its own LLM
+        # instance internally via get_llm() - this function doesn't need its own.
         incident_id = f"teacher_{datetime.utcnow().timestamp()}"
         
         # Run workflow and get final state

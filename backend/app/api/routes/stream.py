@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, Optional
 import uuid
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 

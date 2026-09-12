@@ -2,9 +2,9 @@
 
 from fastapi import APIRouter, Response, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text, func
+from sqlalchemy import text
 from typing import Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from app.database.postgres import get_db
 from app.core.cache import cache_response

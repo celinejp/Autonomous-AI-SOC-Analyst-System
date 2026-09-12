@@ -1,6 +1,6 @@
 """LangGraph workflow for SOC analyst agents with streaming support."""
 
-from typing import AsyncGenerator, Dict, Any, Callable
+from typing import AsyncGenerator, Dict, Any
 import uuid
 from datetime import datetime
 import asyncio

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from app.core.logging import get_logger
 from app.database.redis_client import get_redis_client

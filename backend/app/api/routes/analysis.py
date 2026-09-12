@@ -1,6 +1,6 @@
 """Analysis streaming endpoints."""
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from typing import List
 import json

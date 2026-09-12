@@ -8,9 +8,13 @@ Think of it like this:
 - **Sports**: Coaches study opponent plays to defend against them
 - **Cybersecurity**: Security teams study hacker techniques (ATT&CK) to detect and stop attacks
 
-## What Does "24+ MITRE ATT&CK Rules" Mean?
+## What Does "24 native MITRE ATT&CK Rules" Mean?
 
-**In simple terms:** Your system can detect **24 different types of cyberattacks** that are documented in the MITRE ATT&CK framework.
+**In simple terms:** Your system has **24 hand-written detection patterns**, each tied to a
+specific MITRE ATT&CK technique. This document is about those 24. Separately, the system
+also loads the *entire* MITRE ATT&CK dataset (~700 techniques) into its vector database for
+lookup, search, and tagging - so it can *recognize and label* far more than 24 technique
+types, it just only has a purpose-built detection *rule* for these 24.
 
 Each "rule" is like a **detection pattern** for a specific attack technique.
 
@@ -149,7 +153,7 @@ count-based, not time-windowed."
 
 ## Why This Matters for Your Resume
 
-**"24+ MITRE ATT&CK rules"** shows that:
+**"24 native MITRE ATT&CK rules"** shows that:
 1. ✅ Your system detects **real, documented attack techniques** (not just generic alerts)
 2. ✅ It follows **industry standards** (MITRE ATT&CK is used by major companies)
 3. ✅ It provides **specific, actionable intelligence** (knows exactly what attack is happening)
@@ -207,7 +211,7 @@ count-based, not time-windowed."
 
 ## Key Takeaway
 
-**"24+ MITRE ATT&CK rules"** = Your system can automatically detect and classify 24 different types of cyberattacks using industry-standard techniques.
+**"24 native MITRE ATT&CK rules"** = Your system can automatically detect and classify 24 different types of cyberattacks using industry-standard techniques.
 
 This is impressive because:
 - Most security systems just detect "suspicious activity"

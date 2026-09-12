@@ -6,8 +6,6 @@ from typing import Any, Dict
 from app.core.llm_factory import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agents.base import BaseAgent
-from app.core.config import settings
 from app.models.agent_state import AgentState
 
 SYSTEM_PROMPT = """You are a critic agent that reviews security incident analysis for quality and correctness using comprehensive multi-dimensional checks.

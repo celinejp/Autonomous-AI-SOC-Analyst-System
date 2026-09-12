@@ -1,6 +1,5 @@
 """Service layer for incident operations."""
 
-from typing import List, Optional
 from datetime import datetime
 import uuid
 
@@ -11,8 +10,7 @@ from app.database.models import (
     AlertModel, MITRETechniqueModel, IncidentReportModel,
     ResponsePlanModel, AgentExecutionLogModel
 )
-from app.models.incident import Incident, IncidentStatus, Severity, Alert, IncidentReport, ResponsePlan
-from app.models.log_entry import LogEntry
+from app.models.incident import IncidentStatus, Severity
 
 
 class IncidentService:
