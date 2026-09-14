@@ -8,7 +8,8 @@ import { Shield, AlertTriangle, FileText, Globe } from 'lucide-react';
 interface IOC {
   type: 'ip' | 'domain' | 'hash' | 'url' | 'email';
   value: string;
-  threat_level?: 'high' | 'medium' | 'low';
+  confidence?: 'high' | 'medium' | 'low';
+  recommended_action?: 'block' | 'monitor' | 'investigate';
   first_seen?: string;
   last_seen?: string;
 }
@@ -24,20 +25,22 @@ export function IOCsTable({ iocs }: IOCsTableProps) {
   if (Array.isArray(iocs)) {
     normalizedIOCs = iocs;
   } else if (typeof iocs === 'object' && iocs !== null) {
-    // Handle object format: { ips: [], domains: [], hashes: [] }
-    if (iocs.ips) {
+    // Real backend shape (IOCCollection from analyst_agent.py): typed buckets of
+    // full IOCEntry objects ({value, type, confidence, recommended_action, ...}).
+    const typedBuckets = ['ip_addresses', 'domains', 'urls', 'file_hashes', 'email_addresses'];
+    for (const bucket of typedBuckets) {
+      if (Array.isArray(iocs[bucket])) {
+        normalizedIOCs.push(...(iocs[bucket] as IOC[]));
+      }
+    }
+    // Legacy/alternate shape: plain string lists keyed by short names.
+    if (Array.isArray(iocs.ips)) {
       normalizedIOCs.push(...(iocs.ips as string[]).map(ip => ({ type: 'ip' as const, value: ip })));
     }
-    if (iocs.domains) {
-      normalizedIOCs.push(...(iocs.domains as string[]).map(domain => ({ type: 'domain' as const, value: domain })));
-    }
-    if (iocs.hashes) {
+    if (Array.isArray(iocs.hashes)) {
       normalizedIOCs.push(...(iocs.hashes as string[]).map(hash => ({ type: 'hash' as const, value: hash })));
     }
-    if (iocs.urls) {
-      normalizedIOCs.push(...(iocs.urls as string[]).map(url => ({ type: 'url' as const, value: url })));
-    }
-    if (iocs.emails) {
+    if (Array.isArray(iocs.emails)) {
       normalizedIOCs.push(...(iocs.emails as string[]).map(email => ({ type: 'email' as const, value: email })));
     }
   }
@@ -68,7 +71,7 @@ export function IOCsTable({ iocs }: IOCsTableProps) {
     }
   };
 
-  const getThreatBadge = (level?: string) => {
+  const getConfidenceBadge = (level?: string) => {
     if (!level) return null;
     const colors: Record<string, string> = {
       high: 'bg-red-500/20 text-red-400',
@@ -88,8 +91,8 @@ export function IOCsTable({ iocs }: IOCsTableProps) {
         <TableRow className="border-gray-800">
           <TableHead className="text-gray-400">Type</TableHead>
           <TableHead className="text-gray-400">Value</TableHead>
-          <TableHead className="text-gray-400">Threat Level</TableHead>
-          <TableHead className="text-gray-400">Actions</TableHead>
+          <TableHead className="text-gray-400">Confidence</TableHead>
+          <TableHead className="text-gray-400">Recommended Action</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -107,12 +110,12 @@ export function IOCsTable({ iocs }: IOCsTableProps) {
               </code>
             </TableCell>
             <TableCell>
-              {getThreatBadge(ioc.threat_level)}
+              {getConfidenceBadge(ioc.confidence)}
             </TableCell>
             <TableCell>
-              <Button variant="outline" size="sm" className="mr-2">
+              <Button variant="outline" size="sm" className="mr-2 capitalize" disabled>
                 <Shield className="h-3 w-3 mr-1" />
-                Block
+                {ioc.recommended_action || 'investigate'}
               </Button>
             </TableCell>
           </TableRow>

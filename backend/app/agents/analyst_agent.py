@@ -1,14 +1,14 @@
 """Analyst Agent - Primary reasoning engine that synthesizes information."""
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.llm_factory import get_llm
 from app.core.logging import get_logger
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.models.agent_state import AgentState
-from app.models.incident import IncidentReport
+from app.models.incident import IncidentReport, IOCCollection, IOCEntry
 from app.tools.similarity_search import search_similar_incidents
 from app.tools.ip_lookup import lookup_ip
 
@@ -28,15 +28,19 @@ Return ONLY valid JSON with this exact schema:
   "timeline": [{"timestamp": "2026-08-30T10:15:00", "event": "what happened", "severity": "low|medium|high|critical"}],
   "affected_assets": ["<actual hostnames/IPs from the alerts above, e.g. 203.0.113.55>"],
   "root_cause": "initial access vector, vulnerabilities/misconfigurations exploited, contributing factors",
-  "impact_assessment": "business/data impact, indicators of compromise, and regulatory considerations",
+  "impact_assessment": "business/data impact and regulatory considerations",
   "confidence_score": 0.0,
   "reasoning_process": ["step-by-step reasoning that led to the above conclusions"],
   "detection_gaps": ["missing telemetry or logging that limited this investigation"],
-  "lessons_learned": ["security controls that failed or were absent, process improvements needed"]
+  "lessons_learned": ["security controls that failed or were absent, process improvements needed"],
+  "indicators_of_compromise": [{"value": "<a real IP/domain/hash/URL/email address from the alerts or IP reputation above - never invent one>", "type": "ip|domain|url|hash|email", "confidence": "low|medium|high", "recommended_action": "block|monitor|investigate"}]
 }
 
 confidence_score MUST be a number between 0.0 and 1.0.
 Be concise and actionable. Prioritize findings by business impact.
+For indicators_of_compromise, only list values that actually appear in the ALERTS or IP
+REPUTATION sections above - if none are worth flagging beyond what's already obvious from
+the alert source IPs, return an empty list rather than guessing.
 Use tools first if you need more context, then answer with the JSON object only - no markdown, no prose outside the JSON."""
 
 
@@ -210,7 +214,117 @@ def _parse_incident_report(content: str, alerts: List, logs: List) -> IncidentRe
         reasoning_process=report_data.get("reasoning_process") or [content[:200]],
         detection_gaps=_parse_detection_gaps(report_data.get("detection_gaps")),
         lessons_learned=[str(x) for x in (report_data.get("lessons_learned") or [])],
+        indicators_of_compromise=_build_ioc_collection(alerts, logs, report_data.get("indicators_of_compromise")),
     )
+
+
+_IOC_TYPE_TO_BUCKET = {
+    "ip": "ip_addresses",
+    "domain": "domains",
+    "url": "urls",
+    "hash": "file_hashes",
+    "email": "email_addresses",
+}
+_VALID_IOC_ACTIONS = {"block", "monitor", "investigate"}
+_VALID_IOC_CONFIDENCE = {"low", "medium", "high"}
+
+
+def _severity_to_ioc_action(severity: Any) -> str:
+    """Map an alert's severity to a default IOC recommended_action - a reasonable
+    heuristic tied to a real signal already on the alert, not an arbitrary default."""
+    value = severity.value if hasattr(severity, "value") else str(severity)
+    if value in ("critical", "high"):
+        return "block"
+    if value == "medium":
+        return "investigate"
+    return "monitor"
+
+
+def _extract_known_iocs(alerts: List, logs: List) -> Dict[str, List[IOCEntry]]:
+    """Deterministically pull IOCs straight from the structured LogEntry fields tied
+    to each alert (source/destination IP, file hashes, DNS queries, email addresses).
+    Unlike the LLM-identified IOCs the prompt also asks for, these can't be omitted
+    by a non-deterministic model or hallucinated: if the raw log has a source_ip,
+    it's a real, observed IOC. This is what keeps indicators_of_compromise reliably
+    populated instead of depending entirely on the LLM choosing to fill in a nested
+    JSON array correctly every time."""
+    buckets: Dict[str, Dict[str, IOCEntry]] = {b: {} for b in _IOC_TYPE_TO_BUCKET.values()}
+
+    def add(bucket: str, value: Optional[str], techniques: List[str], action: str):
+        if not value:
+            return
+        existing = buckets[bucket].get(value)
+        if existing:
+            for t in techniques:
+                if t not in existing.related_techniques:
+                    existing.related_techniques.append(t)
+            return
+        ioc_type = next(k for k, v in _IOC_TYPE_TO_BUCKET.items() if v == bucket)
+        buckets[bucket][value] = IOCEntry(
+            value=value,
+            type=ioc_type,
+            related_techniques=list(techniques),
+            confidence="high",  # directly observed in raw log data, not inferred
+            recommended_action=action,
+        )
+
+    for alert in alerts:
+        action = _severity_to_ioc_action(alert.severity)
+        for log_idx in alert.related_logs:
+            try:
+                log = logs[int(log_idx)]
+            except (ValueError, IndexError, TypeError):
+                continue
+            add("ip_addresses", log.source_ip, alert.mitre_techniques, action)
+            add("ip_addresses", log.destination_ip, alert.mitre_techniques, action)
+            add("file_hashes", log.file_hash_sha256, alert.mitre_techniques, action)
+            add("file_hashes", log.file_hash_md5, alert.mitre_techniques, action)
+            if log.dns_query:
+                add("domains", log.dns_query.rstrip("."), alert.mitre_techniques, action)
+            add("email_addresses", log.email_sender, alert.mitre_techniques, action)
+            for recipient in (log.email_recipients or []):
+                add("email_addresses", recipient, alert.mitre_techniques, action)
+
+    return {bucket: list(entries.values()) for bucket, entries in buckets.items()}
+
+
+def _merge_llm_iocs(buckets: Dict[str, List[IOCEntry]], items: Any) -> None:
+    """Merge the LLM's own identified IOCs (which may add judgment - e.g. a
+    reputation-flagged IP - that pure log extraction can't) into the deterministic
+    buckets above, skipping anything malformed or already present rather than
+    failing the whole report over one bad entry."""
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("value") or "").strip()
+        ioc_type = str(item.get("type") or "").strip().lower()
+        bucket = _IOC_TYPE_TO_BUCKET.get(ioc_type)
+        if not value or not bucket:
+            continue
+        if any(existing.value == value for existing in buckets[bucket]):
+            continue
+        confidence = item.get("confidence")
+        if confidence not in _VALID_IOC_CONFIDENCE:
+            confidence = "medium"
+        action = item.get("recommended_action")
+        if action not in _VALID_IOC_ACTIONS:
+            action = "investigate"
+        try:
+            buckets[bucket].append(IOCEntry(
+                value=value, type=ioc_type, confidence=confidence, recommended_action=action,
+            ))
+        except Exception:
+            continue
+
+
+def _build_ioc_collection(alerts: List, logs: List, llm_items: Any) -> Optional[IOCCollection]:
+    buckets = _extract_known_iocs(alerts, logs)
+    _merge_llm_iocs(buckets, llm_items)
+    if not any(buckets.values()):
+        return None
+    return IOCCollection(**buckets)
 
 
 def _default_timeline(alerts: List) -> List[Dict[str, Any]]:
@@ -270,5 +384,6 @@ def _fallback_report(content: str, alerts: List, logs: List) -> IncidentReport:
         impact_assessment="Assessment pending",
         confidence_score=0.75,
         reasoning_process=[s[:200] for s in sections[:5]],
+        indicators_of_compromise=_build_ioc_collection(alerts, logs, None),
     )
 

@@ -103,6 +103,7 @@ class IncidentReportModel(Base):
     impact_assessment = Column(Text, nullable=False)
     confidence_score = Column(Float, default=0.0, nullable=False)
     reasoning_process = Column(JSON, default=list)
+    indicators_of_compromise = Column(JSON, default=None, nullable=True)
     embedding = Column(Vector(768), nullable=True)
 
     # Relationships

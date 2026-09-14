@@ -17,7 +17,8 @@ This system autonomously analyzes security logs, detects threats, enriches findi
 - **Multi-Cloud Log Format Parsing**: recognizes AWS CloudTrail, Azure Activity Log, and GCP
   Audit Log JSON shapes when pasted/uploaded - there is no live connection to AWS, Azure, or
   GCP (no SDKs, no credentials, no API polling); you export or paste the logs yourself
-- **Enhanced SOC Features**: Structured IOCs, regulatory impact, role-based response plans
+- **Enhanced SOC Features**: Structured IOCs (real, see [System Capabilities](#soc-features)),
+  role-based response plans; regulatory impact is schema-only, not yet populated
 - **SOC KPI Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
 - **Modern Tech Stack**: FastAPI + Next.js 15 + LangGraph + Multi-LLM support
 - **Dockerized**: one-command local stack (Postgres/pgvector, Redis, Qdrant, backend, worker, frontend), structured logging
@@ -73,7 +74,7 @@ SSE, without touching the Redis Streams queue or the worker at all. See
        │
        ▼
 ┌─────────────┐
-│Analyst Agent│  Deep analysis, root cause, IOCs, regulatory impact
+│Analyst Agent│  Deep analysis, root cause, structured IOCs
 │             │  SOC-aligned incident reports
 └──────┬──────┘
        │
@@ -92,7 +93,7 @@ SSE, without touching the Redis Streams queue or the worker at all. See
                     │
                     ▼
         ┌───────────────────┐
-        │ Response Planner  │  Role-based actions, IOC blocklists
+        │ Response Planner  │  Role-based actions, team assignments
         │ Agent             │  Team assignments, approval workflows
         └───────────────────┘
 ```
@@ -323,15 +324,24 @@ The Detection Agent identifies:
 
 ### SOC Features
 
-- **Structured Incident Reports**: Executive summary, IOCs (as free text within the report),
-  detection gaps. The `IncidentReport` model also declares structured `regulatory_impact`,
-  `indicators_of_compromise`, `confidence_assessment`, and `data_completeness` fields, but no
-  agent currently populates them - they're always `null` on every incident today. Treat
-  those four as schema reserved for future work, not a working feature.
+- **Structured Incident Reports**: Executive summary, technical findings, detection gaps, and
+  structured `indicators_of_compromise` - see below. The `IncidentReport` model also declares
+  `regulatory_impact`, `confidence_assessment`, and `data_completeness` fields, but no agent
+  currently populates them - they're always `null` on every incident today. Treat those three
+  as schema reserved for future work, not a working feature.
+- **Structured IOCs, for real**: `indicators_of_compromise` is populated two ways and merged:
+  (1) deterministically, straight from the structured `LogEntry` fields already tied to each
+  alert - source/destination IP, file hashes, DNS queries, email addresses - so it's never
+  dependent on the LLM choosing to comply, and (2) the Analyst LLM can add its own
+  judgment-based entries (e.g. a reputation-flagged IP) on top. Each entry carries a
+  `confidence` and a severity-derived `recommended_action` (block/monitor/investigate).
+  Persisted via `incident_reports.indicators_of_compromise` (migration
+  `005_add_indicators_of_compromise.sql`) and rendered on the incident page's IOCs table.
 - **Role-Based Response Plans**: Team assignments (SOC, Network, Endpoint, IAM, Legal, PR, Management - whichever the LLM judges relevant per incident)
-- **IOC Blocklists (schema only, not implemented)**: `ResponsePlan.ioc_blocklist_updates`
-  (firewall IP blocks, DNS sinkhole, EDR hash blocks) is declared in the model but, like the
-  four report fields above, nothing currently sets it - it's always empty.
+- **IOC Blocklists (schema only, not implemented)**: `ResponsePlan.ioc_blocklist_updates` - a
+  separate field from the report's `indicators_of_compromise` above, meant for deployable
+  block instructions (firewall IP blocks, DNS sinkhole, EDR hash blocks) - is declared in the
+  model but nothing currently sets it; it's always empty.
 - **SOC Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
 - **Organization Profiles**: Business context, critical assets, escalation matrix
 

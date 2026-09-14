@@ -117,6 +117,8 @@ class IncidentService:
                 return report.get(key, default)
             return getattr(report, key, default)
         if incident_report:
+            iocs = _report_attr(incident_report, "indicators_of_compromise")
+            iocs_json = iocs.dict() if hasattr(iocs, "dict") else iocs
             report_model = IncidentReportModel(
                 incident_id=incident_id,
                 executive_summary=_report_attr(incident_report, "executive_summary") or "",
@@ -127,6 +129,7 @@ class IncidentService:
                 impact_assessment=_report_attr(incident_report, "impact_assessment") or "",
                 confidence_score=float(_report_attr(incident_report, "confidence_score") or 0),
                 reasoning_process=_report_attr(incident_report, "reasoning_process") or "",
+                indicators_of_compromise=iocs_json,
             )
             session.add(report_model)
 
