@@ -13,6 +13,7 @@ from app.database.repositories import IncidentRepository
 from app.database.models import ResponsePlanModel
 from app.models.incident import Incident, IncidentStatus, Severity
 from app.core.logging import get_logger
+from app.core.time_utils import parse_iso_timestamp_naive
 from app.core.cache import cache_response
 from pydantic import BaseModel
 
@@ -255,8 +256,8 @@ async def get_incident_status(
             eta_seconds = None
             if started_at_str:
                 try:
-                    started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
-                    elapsed = (datetime.utcnow() - started_at.replace(tzinfo=None)).total_seconds()
+                    started_at = parse_iso_timestamp_naive(started_at_str)
+                    elapsed = (datetime.utcnow() - started_at).total_seconds()
                     remaining = estimated_duration - elapsed
                     eta_seconds = max(0, int(remaining))
                 except Exception:

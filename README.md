@@ -221,6 +221,12 @@ Navigate to `/ingest` and either:
 - **Azure Monitor** (format parser)
 - **GCP Audit Logs** (format parser)
 
+Cloud formats are recognized by their JSON keys (`eventSource`/`eventName` for CloudTrail,
+`callerIpAddress`/`operationName` for Azure, `protoPayload`/`methodName` for GCP). Nothing is
+pulled from a cloud account - export the events yourself and submit each one as a JSON string
+in the `/api/ingest/analyze` array. Demo Mode and "Generate synthetic" produce plain-text logs,
+not cloud-shaped JSON, so to exercise these parsers you need to supply your own sample.
+
 ### 2. Monitor Real-time Analysis
 
 The system will automatically:
@@ -374,13 +380,16 @@ curl -X POST http://localhost:8000/api/health/test-workflow \
 
 1. Navigate to http://localhost:3000/ingest
 2. Click "Demo Mode" tab
-3. Click "Run Test" on any scenario:
-   - Brute Force SSH
-   - SQL Injection
-   - Port Scan
-   - Data Exfiltration
-   - Normal Traffic
-4. View PASS/FAIL validation results
+3. Pick a scenario from the dropdown and click "Run Demo Scenario":
+   - Brute Force (T1110)
+   - PowerShell Execution (T1059.001)
+   - RDP Lateral Movement (T1021.001)
+   - Ransomware (T1486)
+   - Cloud IAM Abuse
+   - Port Scan (T1046)
+4. Watch the agents run live over SSE; you're redirected to the resulting incident when it
+   finishes. Demo Mode shows no PASS/FAIL verdict - to check an incident against expected
+   criteria, call `GET /api/debug/validate-incident/{id}` afterward (see `docs/TESTING_GUIDE.md`).
 
 ### Automated Test Suite
 

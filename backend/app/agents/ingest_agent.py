@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 from app.core.logging import get_logger
+from app.core.time_utils import parse_iso_timestamp_naive
 from app.models.agent_state import AgentState
 from app.models.log_entry import LogEntry, LogSource, LogSourceType
 
@@ -77,7 +78,7 @@ def _parse_json_log(log_data: Dict[str, Any], raw_log: str) -> LogEntry:
     # Extract timestamp
     timestamp_str = log_data.get("timestamp") or log_data.get("time") or log_data.get("@timestamp")
     if isinstance(timestamp_str, str):
-        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        timestamp = parse_iso_timestamp_naive(timestamp_str)
     else:
         timestamp = datetime.utcnow()
     
@@ -131,7 +132,7 @@ def parse_cloudtrail_log(log_entry: dict) -> LogEntry:
     """Parse AWS CloudTrail log format."""
     timestamp_str = log_entry.get("eventTime")
     if timestamp_str:
-        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        timestamp = parse_iso_timestamp_naive(timestamp_str)
     else:
         timestamp = datetime.utcnow()
     
@@ -163,7 +164,7 @@ def parse_azure_activity_log(log_entry: dict) -> LogEntry:
     """Parse Azure Activity Log format."""
     timestamp_str = log_entry.get("time")
     if timestamp_str:
-        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        timestamp = parse_iso_timestamp_naive(timestamp_str)
     else:
         timestamp = datetime.utcnow()
     
@@ -192,7 +193,7 @@ def parse_gcp_audit_log(log_entry: dict) -> LogEntry:
     """Parse GCP Audit Log format."""
     timestamp_str = log_entry.get("timestamp")
     if timestamp_str:
-        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        timestamp = parse_iso_timestamp_naive(timestamp_str)
     else:
         timestamp = datetime.utcnow()
     

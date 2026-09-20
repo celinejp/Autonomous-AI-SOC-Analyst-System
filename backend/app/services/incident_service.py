@@ -5,6 +5,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time_utils import ensure_naive_utc, parse_iso_timestamp_naive
 from app.database.repositories import IncidentRepository, LogEntryRepository
 from app.database.models import (
     AlertModel, MITRETechniqueModel, IncidentReportModel,
@@ -62,10 +63,10 @@ class IncidentService:
         for alert in alerts:
             ts = _alert_attr(alert, "timestamp")
             if hasattr(ts, "isoformat"):
-                pass
+                ts = ensure_naive_utc(ts)
             elif isinstance(ts, str):
                 try:
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    ts = parse_iso_timestamp_naive(ts)
                 except (ValueError, AttributeError):
                     ts = datetime.utcnow()
             else:
@@ -165,7 +166,7 @@ class IncidentService:
             timestamp_str = log_entry.get("timestamp")
             if isinstance(timestamp_str, str):
                 try:
-                    log_timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    log_timestamp = parse_iso_timestamp_naive(timestamp_str)
                 except (ValueError, AttributeError):
                     log_timestamp = datetime.utcnow()
             else:
@@ -198,9 +199,10 @@ class IncidentService:
                     pass
                 else:
                     ls = "unknown"
+                log_ts = _log_attr(log, "timestamp")
                 log_entries_data.append({
                     "incident_id": incident_id,
-                    "timestamp": _log_attr(log, "timestamp") or datetime.utcnow(),
+                    "timestamp": ensure_naive_utc(log_ts) if log_ts else datetime.utcnow(),
                     "source_ip": _log_attr(log, "source_ip"),
                     "destination_ip": _log_attr(log, "destination_ip"),
                     "destination_port": _log_attr(log, "destination_port"),
