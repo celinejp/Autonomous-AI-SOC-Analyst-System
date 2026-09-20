@@ -72,16 +72,8 @@ def get_mitre_technique(technique_id: str) -> str:
     return f"MITRE Technique {technique_id.upper()}: {technique}"
 
 
-# Empirically tuned against the *current* mitre_techniques collection size (697
-# real techniques after scripts/load_mitre.py) - swept 0.65/0.70/0.75/0.80/0.85
-# against backend/data/labeled_incidents.json via eval_detection_metrics.py
-# --mode rules --enrich, picking the elbow (0.80/0.85 plateau at precision=0.944).
-# A value tuned against a small/sparse collection (e.g. the old 8-item sample
-# set, where 0.65 was correct) silently produces severe over-tagging against a
-# larger, denser one - confirmed live (precision cratered to 0.243 right after
-# loading the real ~700-technique dataset at the old threshold). Re-sweep this
-# any time the collection is reloaded with a meaningfully different technique
-# count.
+# Similarity threshold tuned by a sweep (0.65-0.85) against the labeled fixtures with the full ~700-technique
+# catalogue loaded (precision plateaus at 0.80-0.85). Re-sweep if the catalogue size changes a lot.
 MITRE_SCORE_THRESHOLD = 0.80
 
 

@@ -1,187 +1,38 @@
-# Stack, Implementation & Connectivity
+# Stack and what is wired to what
 
-Overview of the **tech stack and each component’s role**, what is **implemented**, and **how connected** everything is (end-to-end vs backend-only).
+## Components
 
----
-
-## 1. Tech stack and roles
-
-### Frontend
 | Layer | Technology | Role |
-|-------|------------|------|
-| **App** | Next.js 15 (App Router) | Routing, SSR/CSR, layout |
-| **UI** | React 18, TypeScript, Tailwind, shadcn/ui | Pages, components, styling |
-| **Data** | TanStack Query (React Query v5) | Server state, caching, mutations |
-| **Charts** | Recharts | Dashboards, severity/custom charts |
-| **Real-time** | Fetch + ReadableStream (SSE) | Demo mode live agent stream |
+|---|---|---|
+| Frontend | Next.js 15 (App Router), React 18, TypeScript, Tailwind/shadcn, TanStack Query, Recharts | UI; live progress via `fetch` + ReadableStream (SSE) |
+| API | FastAPI | REST + SSE, OpenAPI docs at `/docs` |
+| Orchestration | LangGraph | 6-node graph with one Critic -> Analyst loop; no checkpointer |
+| LLM | Ollama (default `llama3.1`), OpenAI, Groq, Anthropic | one factory, `LLM_PROVIDER` / `LLM_MODEL`; every call has a timeout |
+| Postgres + pgvector | incidents, alerts, reports, response plans, agent logs; incident embeddings | source of truth; incident search and similar-incident tool |
+| Qdrant | ~700 MITRE technique embeddings | technique grounding and technique search only |
+| Redis | Streams job queue, incident status, response cache, locks, rate limit | |
+| Worker | `python -m app.workers.analysis_worker` | consumes the queue; retries 3x then dead-letter stream |
+| Docker Compose | postgres, redis, qdrant, backend, worker, frontend | Ollama runs on the host; restart `worker` after agent code changes |
 
-**Role:** User interface for SOC analysts: ingest logs, run demos, view incidents, dashboard, insights, health, debug, synthetic log generation.
+## Request paths
 
----
+- **Upload / analyze:** `POST /api/ingest/*` creates an incident and queues a job -> worker runs the graph, saves
+  the incident, queues an embedding job -> UI polls `GET /api/incidents/{id}/status`.
+- **Demo Mode:** `POST /api/v1/incidents/stream` runs the graph as a background task and streams agent events over
+  SSE; the incident is saved even if the browser disconnects.
 
-### Backend API
-| Layer | Technology | Role |
-|-------|------------|------|
-| **Framework** | FastAPI | REST + SSE, async, OpenAPI docs |
-| **Routers** | 12 route modules | Health, incidents, ingest, stream, dashboard, metrics, debug, synthetic, analysis, semantic search, validation, performance |
+## UI pages and their endpoints
 
-**Role:** HTTP API and streaming; orchestrates agents, DB, cache, and external services.
+| Page | Uses |
+|---|---|
+| Dashboard `/` | `/api/dashboard/stats`, `/api/metrics/soc-kpis` |
+| Ingest `/ingest` | `/api/ingest/analyze`, `/api/v1/incidents/stream`, `/api/synthetic/generate` |
+| Incidents `/incidents`, `/incident/[id]` | `/api/incidents` (list, detail, status, response-plan actions), JSON download |
+| Search `/search` | `/api/v1/incidents/search/semantic`, `/api/v1/mitre/search` |
+| Insights `/insights` | `/api/metrics/*`, dashboard stats |
+| Health `/health` | `/api/health/basic`, `/api/health/deep` |
+| Debug `/debug` | `/api/debug/*`, `/api/v1/validate/*`, `/api/v1/performance/metrics` |
 
----
+## Not wired / not built
 
-### AI / orchestration
-| Layer | Technology | Role |
-|-------|------------|------|
-| **Orchestration** | LangGraph | Multi-agent state machine, reflection loop (critic → re-analyze) |
-| **Agents** | 6 agents (Ingest, Detection, Threat Intel, Analyst, Critic, Response Planner) | Parse logs, detect threats, enrich with ATT&CK, write report, critique, produce response plan |
-| **LLM** | Multi-provider (Ollama, OpenAI, Groq, Anthropic) | Agent prompts and tool use |
-| **Tools** | LangChain tools | MITRE search, similar-incident search |
-
-**Role:** End-to-end analysis pipeline from raw logs to incident report and response plan.
-
----
-
-### Data & infrastructure
-| Layer | Technology | Role |
-|-------|------------|------|
-| **Primary DB** | PostgreSQL + pgvector | Incidents, alerts, reports, response plans, org profile, agent logs, log entries |
-| **Cache** | Redis | Incident status during analysis, API response cache |
-| **Vector DB** | Qdrant | Semantic search, threat intel (when used) |
-| **Migrations** | SQL scripts under `backend/scripts/migrations/` | Schema for incidents, reports, response_plans, etc. |
-
-**Role:** Persistence, caching, and vector search for the pipeline and UI.
-
----
-
-### DevOps / run
-| Layer | Technology | Role |
-|-------|------------|------|
-| **Containers** | Docker Compose | PostgreSQL, Redis, Qdrant, `backend` (API), `worker` (consumes the Redis Streams ingest queue and runs the LangGraph workflow - no `--reload`, restart it after any agent code change), `frontend` |
-| **Scripts** | `start.sh`, `stop.sh`, `init_db` | One-command start/stop and DB init |
-
-**Role:** Run full stack locally or in a lab.
-
----
-
-## 2. What is implemented
-
-### Fully implemented (backend + frontend + wired)
-
-| Area | Backend | Frontend | Connection |
-|------|---------|----------|------------|
-| **Log ingestion** | `/api/ingest/analyze`, `/api/ingest/upload` | Ingest page (paste/upload, Analyze) | Full: UI → API queues to Redis Streams → separate `worker` container runs the LangGraph workflow → DB → incident (UI polls status) |
-| **Demo mode** | `POST /api/v1/incidents/stream` (SSE) | Ingest → Demo tab, Run Demo, stream viewer, redirect | Full: UI → workflow runs inline in the `backend` process (not queued to the worker) → stream progress → save incident → redirect |
-| **Incidents** | CRUD + filters + `GET/PUT /incidents/:id/status`, `PATCH .../response-plan/actions/:id` | List, detail, filters, Mark Contained/Closed, response plan “Start Action” | Full: all actions call API and refresh data |
-| **Dashboard** | `/api/dashboard/stats` | Home: cards, top MITRE, quick links | Full |
-| **Metrics** | `/api/metrics/soc-kpis`, `/api/metrics/attack-coverage` | Home + Insights: SOC KPIs, ATT&CK coverage | Full |
-| **Health** | `/api/health/basic`, `/api/health/deep` | Health page, Refresh / Deep Check | Full |
-| **Debug** | `GET /api/debug/last-analysis/:id`, `GET /api/debug/agent-traces` | Debug page: last analysis by incident, recent traces | Full |
-| **Synthetic** | `POST /api/synthetic/generate` | Ingest → “Generate synthetic” → fill textarea | Full |
-
-### Also wired (UI added)
-
-| Area | Backend | Frontend | Connection |
-|------|---------|----------|------------|
-| **Search** | Semantic + MITRE search APIs | Search page: semantic incident search, MITRE technique search | Full |
-| **Validation** | Validation router (metrics, validate, aggregate) | Debug page: Validation card (incident metrics + aggregate) | Full |
-| **Performance** | Performance routes (Redis/metrics) | Debug page: Performance card | Full |
-
-### Backend-only (optional / internal)
-
-| Area | Backend | Notes |
-|------|---------|-------|
-| **Analysis (alternate)** | `/api/analysis/stream`, etc. | Demo uses `/api/v1/incidents/stream` instead |
-
-### Implemented in pipeline (used by ingest/demo, not directly by UI)
-
-- **LangGraph workflow** (all 6 agents) - runs in the `worker` container for queued ingestion, inline in `backend` for the Demo Mode SSE stream
-- **ATT&CK rules** (detection agent)
-- **Cloud log parsers** (AWS/Azure/GCP formats in ingest agent)
-- **IncidentService** (save from state to PostgreSQL)
-- **Redis** - both the Streams queue the worker consumes and the incident-status cache the UI polls
-
----
-
-## 3. Connectivity overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ FRONTEND (Next.js 15, React, TanStack Query)                             │
-│   Pages: / (Dashboard), /ingest, /incidents, /incident/[id], /search,   │
-│          /insights, /health, /debug                          │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │ HTTP + SSE (NEXT_PUBLIC_API_URL → backend)
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ BACKEND API (FastAPI, container: backend)                                │
-│   Connected to UI: health, incidents, ingest, stream (v1), dashboard,   │
-│                    metrics, debug, synthetic, search,                   │
-│                    validation,                                            │
-│                    performance. Optional: analysis (alternate stream).  │
-│   Runs the LangGraph workflow INLINE only for the /v1/incidents/stream  │
-│   (Demo Mode SSE) path - everything else below is queued instead.       │
-└───────┬───────────────────────────────────────────┬─────────────────────┘
-        │ enqueue                                    │ direct
-        ▼                                             │
-┌───────────────────┐                                 │
-│ Redis Streams      │                                 │
-│ (ingest queue)      │                                 │
-└─────────┬───────────┘                                 │
-          ▼                                             │
-┌───────────────────────────────────┐                   │
-│ WORKER (container: worker)         │                   │
-│ Consumes the queue, runs the       │                   │
-│ LangGraph workflow (6 agents),     │                   │
-│ no --reload - restart after any    │                   │
-│ agent code change                  │◄──────────────────┘
-└───────────────┬─────────────────────┘
-                │
-        ┌───────┴───────────────────────┐
-        ▼                               ▼
-┌───────────────┐     ┌─────────────────┐
-│ PostgreSQL    │     │ Redis           │
-│ (incidents,   │     │ (queue, status, │
-│  reports,     │     │  cache)         │
-│  org profile) │     │                 │
-└───────────────┘     └─────────────────┘
-                │
-                ▼
-        ┌───────────────┐
-        │ LLM (Ollama/  │
-        │ OpenAI/Groq/  │
-        │ Anthropic)    │
-        └───────┬───────┘
-                │
-        ┌───────┴───────┐
-        ▼               ▼
-  Qdrant (optional)   Tools
-  (semantic search)  (MITRE, similar incidents)
-```
-
----
-
-## 4. Connection length summary
-
-| Connection | Length | Notes |
-|------------|--------|--------|
-| **UI ↔ Incidents** | End-to-end | List, detail, filters, status update, response-plan action update |
-| **UI ↔ Ingest** | End-to-end | Upload/paste → analyze; demo → stream → incident |
-| **UI ↔ Dashboard/Metrics** | End-to-end | Stats, SOC KPIs, ATT&CK coverage |
-| **UI ↔ Health** | End-to-end | Basic + deep checks |
-| **UI ↔ Debug** | End-to-end | Last analysis by incident, agent traces |
-| **UI ↔ Synthetic** | End-to-end | Generate logs → fill textarea |
-| **Backend ↔ PostgreSQL** | Full | Incidents, reports, plans, org profile, agent logs, log entries |
-| **Backend ↔ Redis** | Full | Ingest queue (Streams), analysis status, API cache |
-| **Backend ↔ LangGraph** | Full | Stream route runs the workflow inline; ingest route queues it for the `worker` container to run |
-| **Backend ↔ LLM** | Full | All agents use configured provider |
-| **Backend ↔ Qdrant** | Optional | Used by semantic/search tools when configured |
-| **UI ↔ Search** | End-to-end | Semantic incident search, MITRE technique search |
-| **UI ↔ Validation / Performance** | End-to-end | Debug page cards |
-
----
-
-## 5. What is left (optional / future)
-
-- **E2E tests** – `test_all_features.sh` and `backend/scripts/test_all_features.py` cover health, ingest, incidents, dashboard, metrics, debug; expand as needed.
-
-Everything required for the main analyst flow is **implemented and connected** end-to-end.
+Login, TLS, live log sources (logs are pasted or uploaded), IOC enrichment, PDF/CSV export, deployment.

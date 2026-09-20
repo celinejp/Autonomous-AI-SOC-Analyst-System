@@ -12,9 +12,9 @@ interface ResponsePlanViewerProps {
 }
 
 export function ResponsePlanViewer({ plan, onActionUpdate }: ResponsePlanViewerProps) {
-  const immediate = plan.immediate_actions?.length ? plan.immediate_actions : (plan.containment_actions || []);
-  const shortTerm = plan.short_term_actions?.length ? plan.short_term_actions : (plan.investigation_steps || []);
-  const longTerm = plan.long_term_actions?.length ? plan.long_term_actions : (plan.remediation_actions || []).concat(plan.long_term_improvements || []);
+  const immediate = plan.containment_actions || [];
+  const shortTerm = plan.investigation_steps || [];
+  const longTerm = (plan.remediation_actions || []).concat(plan.long_term_improvements || []);
   const allActions: Array<ResponseAction & { priority: string }> = [
     ...immediate.map((a: ResponseAction) => ({ ...a, priority: 'immediate' })),
     ...shortTerm.map((a: ResponseAction) => ({ ...a, priority: 'short_term' })),
@@ -80,15 +80,6 @@ export function ResponsePlanViewer({ plan, onActionUpdate }: ResponsePlanViewerP
                               <Users className="h-3 w-3" />
                               <span>{action.assigned_team}</span>
                             </span>
-                            {action.sla_hours && (
-                              <span>SLA: {action.sla_hours}h</span>
-                            )}
-                            {action.automated && (
-                              <Badge variant="outline" className="text-xs">Automated</Badge>
-                            )}
-                            {action.requires_approval && (
-                              <Badge variant="outline" className="text-xs">Requires Approval</Badge>
-                            )}
                           </div>
                         </div>
                         <Badge variant="outline" className="ml-4">

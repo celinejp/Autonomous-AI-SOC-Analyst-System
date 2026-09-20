@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict
 
-from app.core.llm_factory import get_llm
+from app.core.llm_factory import ainvoke_llm, get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.agent_state import AgentState
@@ -99,8 +99,19 @@ LOG SOURCES: {', '.join(set(log.log_source.value for log in logs[:10]))}
         HumanMessage(content=f"Review this incident analysis:\n\n{critique_context}\n\nProvide critical feedback."),
     ]
 
-    response = await llm.ainvoke(messages)
-    content = response.content
+    try:
+        response = await ainvoke_llm(llm, messages)
+        content = response.content
+    except Exception as e:  # LLM down / timed out: accept the report as-is rather than loop
+        state["confidence"] = incident_report.confidence_score
+        state["needs_revision"] = False
+        state["critique_feedback"] = f"Critic unavailable ({type(e).__name__}); report accepted unreviewed."
+        state["agent_execution_log"].append({
+            "agent_name": "critic", "timestamp": datetime.utcnow().isoformat(),
+            "duration_ms": (datetime.utcnow() - _started_at).total_seconds() * 1000,
+            "output_data": {"llm_error": f"{type(e).__name__}: {e}"},
+        })
+        return state
 
     # Parse critique from response
     critique_result = _parse_critique(content, incident_report)
@@ -137,6 +148,13 @@ LOG SOURCES: {', '.join(set(log.log_source.value for log in logs[:10]))}
     return state
 
 
+def _feedback_text(value) -> str:
+    """The prompt asks for a list of feedback strings; downstream code needs one string."""
+    if isinstance(value, (list, tuple)):
+        return "\n".join(f"- {v}" for v in value)
+    return str(value)
+
+
 def _parse_critique(content: str, incident_report) -> Dict[str, Any]:
     """Parse critique from LLM response."""
     import json
@@ -150,7 +168,7 @@ def _parse_critique(content: str, incident_report) -> Dict[str, Any]:
             return {
                 "confidence": float(critique_data.get("confidence_score", incident_report.confidence_score)),
                 "needs_revision": critique_data.get("needs_revision", False),
-                "feedback": critique_data.get("feedback", content),
+                "feedback": _feedback_text(critique_data.get("feedback", content)),
                 "false_positive_likelihood": float(critique_data.get("false_positive_likelihood", 0.2)),
             }
         except Exception:

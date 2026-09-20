@@ -42,15 +42,6 @@ export interface ResponseAction {
   target: string;
   status: string;
   assigned_team: string;
-  requires_approval: boolean;
-  approval_level?: string;
-  automated: boolean;
-  automation_available: boolean;
-  manual_steps?: string[];
-  sla_hours?: number;
-  depends_on: string[];
-  success_criteria: string;
-  verification_steps: string[];
 }
 
 export interface IOCEntry {
@@ -86,9 +77,6 @@ export interface IncidentReport {
 export interface ResponsePlan {
   incident_id: string;
   generated_at: string;
-  immediate_actions: ResponseAction[];
-  short_term_actions: ResponseAction[];
-  long_term_actions: ResponseAction[];
   containment_actions?: ResponseAction[];
   investigation_steps?: ResponseAction[];
   remediation_actions?: ResponseAction[];
@@ -126,7 +114,6 @@ export interface DashboardStats {
 }
 
 export interface SOCMetrics {
-  mttd_seconds: number;
   false_positive_rate: number;
   true_positive_rate: number;
   alerts_received: number;

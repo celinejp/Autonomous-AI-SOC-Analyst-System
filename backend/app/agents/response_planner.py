@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from app.core.llm_factory import get_llm
+from app.core.llm_factory import ainvoke_llm, get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.agent_state import AgentState
@@ -83,7 +83,7 @@ Top Alerts:
     ]
 
     try:
-        response = await llm.ainvoke(messages)
+        response = await ainvoke_llm(llm, messages)
         content = response.content
         response_plan = _parse_response_plan(content, alerts, incident_report)
     except Exception:
@@ -184,13 +184,6 @@ def _normalize_action(raw: Any, defaults: Optional[Dict[str, str]] = None) -> Op
             target=target,
             assigned_team=assigned_team,
             status=status,
-            requires_approval=bool(raw.get("requires_approval", False)),
-            automated=bool(raw.get("automated", False)),
-            automation_available=bool(raw.get("automation_available", False)),
-            success_criteria=str(raw.get("success_criteria") or ""),
-            verification_steps=list(raw.get("verification_steps") or []),
-            depends_on=list(raw.get("depends_on") or []),
-            manual_steps=list(raw.get("manual_steps") or []) or None,
         )
     except Exception:
         return None

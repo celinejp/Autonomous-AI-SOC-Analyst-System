@@ -8,20 +8,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.postgres import get_db
 from app.core.job_queue import enqueue_analysis_job
+from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.input_limits import validate_raw_logs
 from app.models.incident import IncidentStatus, Severity
 
 logger = get_logger(__name__)
 router = APIRouter()
 
 # Keep for status ETA estimates (worker also uses these)
+# Rough per-agent seconds, averaged from 3 timed end-to-end runs with llama3.1 on the dev
+# machine (Ollama, no GPU tuning). Only used for the progress ETA; real time varies with the
+# model, the hardware and how many reflection rounds the Critic asks for.
 AGENT_DURATIONS = {
-    "ingest": 2,
-    "detect": 8,
-    "enrich": 5,
-    "analyze": 15,
-    "critique": 5,
-    "plan_response": 10,
+    "ingest": 1,
+    "detect": 15,
+    "enrich": 8,
+    "analyze": 30,
+    "critique": 30,
+    "plan_response": 32,
 }
 TOTAL_ESTIMATED_SECONDS = sum(AGENT_DURATIONS.values())
 
@@ -62,12 +67,18 @@ async def upload_logs(
 ):
     """Upload and enqueue log file for worker processing."""
     try:
-        content = await file.read()
-        raw_logs = content.decode("utf-8").strip().split("\n")
-        raw_logs = [line for line in raw_logs if line.strip()]
+        # Read one byte past the limit so an oversized file is rejected without loading it all.
+        content = await file.read(settings.max_upload_bytes + 1)
+        if len(content) > settings.max_upload_bytes:
+            raise HTTPException(status_code=413, detail=f"File too large (max {settings.max_upload_bytes} bytes)")
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="File must be UTF-8 text")
+        raw_logs = [line for line in text.strip().split("\n") if line.strip()]
         if not raw_logs:
             raise HTTPException(status_code=400, detail="No log entries found")
-        return await _create_and_enqueue(db, raw_logs)
+        return await _create_and_enqueue(db, validate_raw_logs(raw_logs))
     except HTTPException:
         raise
     except Exception as e:
@@ -82,9 +93,7 @@ async def analyze_logs(
 ):
     """Enqueue logs for analysis via Redis Streams worker."""
     try:
-        if not raw_logs:
-            raise HTTPException(status_code=400, detail="No log entries provided")
-        return await _create_and_enqueue(db, raw_logs)
+        return await _create_and_enqueue(db, validate_raw_logs(raw_logs))
     except HTTPException:
         raise
     except Exception as e:

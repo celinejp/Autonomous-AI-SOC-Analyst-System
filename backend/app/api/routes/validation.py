@@ -15,7 +15,6 @@ from app.database.redis_client import get_redis_client
 from app.core.metrics import (
     IncidentMetrics,
     calculate_incident_metrics,
-    validate_against_ground_truth,
 )
 from app.core.logging import get_logger
 
@@ -23,36 +22,12 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/validate", tags=["validation"])
 
 # Load ground truth data
-GROUND_TRUTH_PATH = Path(__file__).parent.parent.parent.parent / "data" / "labeled_incidents.json"
-
-
-def load_ground_truth() -> dict:
-    """Load labeled incidents from JSON file."""
-    try:
-        with open(GROUND_TRUTH_PATH) as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load ground truth: {e}")
-        return {"incidents": []}
 
 
 class MetricsResponse(BaseModel):
     """Response with incident metrics."""
     incident_id: str
     metrics: IncidentMetrics
-
-
-class ValidationResponse(BaseModel):
-    """Response with validation result."""
-    incident_id: str
-    ground_truth_id: str
-    accuracy: float
-    precision: float
-    recall: float
-    f1_score: float
-    mitre_accuracy: float
-    confidence_score: float
-    details: dict
 
 
 class AggregateResponse(BaseModel):
@@ -71,12 +46,7 @@ class AggregateResponse(BaseModel):
 
 
 _RESULTS_DIR = Path(__file__).parent.parent.parent.parent / "tests" / "results"
-# Most complete/real run first: eval_detection_metrics.py names its output
-# real_accuracy_report{_llm}{_enrich}.json depending on --mode/--enrich flags,
-# so all four combinations need to be checked, not just the two that happened
-# to exist when this list was first written - confirmed live: the endpoint
-# was silently blind to the standard `--mode llm --enrich` run's output
-# (real_accuracy_report_llm_enrich.json) because it wasn't in this list.
+# eval_detection_metrics.py names its output by --mode / --enrich; most complete run first.
 REAL_METRICS_PATHS = [
     _RESULTS_DIR / "real_accuracy_report_llm_enrich.json",
     _RESULTS_DIR / "real_accuracy_report_llm.json",
@@ -184,74 +154,6 @@ async def get_incident_metrics(
     return MetricsResponse(incident_id=incident_id, metrics=metrics)
 
 
-@router.post("/incident/{incident_id}", response_model=ValidationResponse)
-async def validate_incident(
-    incident_id: str,
-    ground_truth_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """Validate incident against ground truth dataset."""
-    # Load ground truth
-    gt_data = load_ground_truth()
-    gt_incidents = gt_data.get("incidents", [])
-    
-    if not gt_incidents:
-        raise HTTPException(status_code=500, detail="Ground truth data not available")
-    
-    # Find matching ground truth
-    ground_truth = None
-    if ground_truth_id:
-        ground_truth = next((i for i in gt_incidents if i["id"] == ground_truth_id), None)
-    
-    if not ground_truth:
-        raise HTTPException(status_code=400, detail="Ground truth ID required or not found")
-    
-    # Fetch incident
-    sql = text("SELECT * FROM incidents WHERE id = :incident_id")
-    result = await db.execute(sql, {"incident_id": incident_id})
-    row = result.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    
-    # Build incident dict (simplified)
-    alerts_sql = text("SELECT * FROM alerts WHERE incident_id = :incident_id")
-    alerts = [dict(r._mapping) for r in (await db.execute(alerts_sql, {"incident_id": incident_id})).fetchall()]
-    
-    techniques_sql = text("SELECT technique_id FROM mitre_techniques WHERE incident_id = :incident_id")
-    techniques = [r.technique_id for r in (await db.execute(techniques_sql, {"incident_id": incident_id})).fetchall()]
-    
-    incident = {
-        "incident_id": incident_id,
-        "severity": str(row.severity) if row.severity else "medium",
-        "confidence_score": row.confidence_score or 0.5,
-        "alerts": alerts,
-        "mitre_techniques": [{"technique_id": t} for t in techniques],
-    }
-    
-    validation = validate_against_ground_truth(incident, ground_truth)
-    
-    # Cache result
-    try:
-        redis = get_redis_client()
-        cache_key = f"validation:{incident_id}:{ground_truth_id}"
-        await redis.setex(cache_key, 3600, validation.model_dump_json())
-    except Exception:
-        pass
-    
-    return ValidationResponse(
-        incident_id=incident_id,
-        ground_truth_id=ground_truth_id,
-        accuracy=validation.accuracy,
-        precision=validation.precision,
-        recall=validation.recall,
-        f1_score=validation.f1_score,
-        mitre_accuracy=validation.mitre_accuracy,
-        confidence_score=validation.confidence_score,
-        details=validation.details,
-    )
-
-
 @router.get("/aggregate", response_model=AggregateResponse)
 async def get_aggregate_metrics(
     days: int = Query(default=30, ge=1, le=365),
@@ -313,27 +215,3 @@ async def get_aggregate_metrics(
         pass
 
     return response
-
-
-@router.get("/ground-truth")
-async def list_ground_truth():
-    """List available ground truth incidents."""
-    gt_data = load_ground_truth()
-    incidents = gt_data.get("incidents", [])
-    
-    return {
-        "total": len(incidents),
-        "true_positives": sum(1 for i in incidents if i.get("is_true_positive")),
-        "false_positives": sum(1 for i in incidents if not i.get("is_true_positive")),
-        "incidents": [
-            {
-                "id": i["id"],
-                "name": i["name"],
-                "is_true_positive": i["is_true_positive"],
-                "severity": i["severity"],
-                "category": i["category"],
-                "mitre_techniques": i["mitre_techniques"],
-            }
-            for i in incidents
-        ]
-    }

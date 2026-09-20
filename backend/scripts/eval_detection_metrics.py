@@ -20,11 +20,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.agents.detection_agent import detection_agent, _rule_based_detection
+from app.agents.detection_agent import detect_rules_only, detection_agent
 from app.agents.ingest_agent import ingest_agent
 from app.agents.threat_intel_agent import threat_intel_agent
-from app.detection.attack_rules import evaluate_attack_rules
-from app.models.incident import Alert, Severity
+from app.models.incident import Alert
 
 
 LABELED_PATH = ROOT / "data" / "labeled_incidents.json"
@@ -96,20 +95,7 @@ async def run_rules_only(raw_logs: List[str], enrich: bool = False) -> Tuple[Lis
     state = await ingest_agent(state)
     logs = state.get("logs") or []
 
-    alerts: List[Alert] = list(_rule_based_detection(logs))
-    for attack_alert in evaluate_attack_rules(logs):
-        alerts.append(
-            Alert(
-                timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
-                severity=Severity(attack_alert["severity"]),
-                title=f"{attack_alert['name']} - {attack_alert['technique_id']}",
-                description=f"Detected {attack_alert['tactic']} technique: {attack_alert['name']}",
-                detection_rule=f"ATT&CK Rule: {attack_alert['technique_id']}",
-                related_logs=attack_alert.get("matched_logs", []),
-                mitre_techniques=[attack_alert["technique_id"]],
-                evidence=[{"rule": attack_alert["technique_id"], "confidence": attack_alert.get("confidence", 0.75)}],
-            )
-        )
+    alerts: List[Alert] = detect_rules_only(logs)
     if enrich and alerts:
         state["alerts"] = alerts
         state = await threat_intel_agent(state)

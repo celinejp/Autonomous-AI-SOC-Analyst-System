@@ -1,7 +1,6 @@
 """SQLAlchemy database models."""
 
 from datetime import datetime
-from typing import Dict, Any
 
 from sqlalchemy import Column, String, DateTime, Float, Integer, Text, ForeignKey, JSON, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
@@ -36,19 +35,6 @@ class IncidentModel(Base):
     response_plan = relationship("ResponsePlanModel", back_populates="incident", uselist=False, cascade="all, delete-orphan")
     agent_execution_log = relationship("AgentExecutionLogModel", back_populates="incident", cascade="all, delete-orphan")
     log_entries = relationship("LogEntryModel", back_populates="incident", cascade="all, delete-orphan")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "id": self.id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "status": self.status.value if self.status else None,
-            "severity": self.severity.value if self.severity else None,
-            "threat_intel": self.threat_intel or {},
-            "confidence_score": self.confidence_score,
-            "false_positive_reason": self.false_positive_reason,
-        }
 
 
 class AlertModel(Base):

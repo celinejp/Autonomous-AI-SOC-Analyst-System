@@ -1,10 +1,8 @@
 """Tests for agent functionality."""
 
 import pytest
-from datetime import datetime
 from app.models.agent_state import AgentState
 from app.agents.ingest_agent import ingest_agent
-from app.models.log_entry import LogEntry, LogSource
 
 
 @pytest.mark.asyncio

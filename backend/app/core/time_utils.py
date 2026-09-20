@@ -1,14 +1,8 @@
 """Timestamp parsing helpers.
 
-Every DB timestamp column in this app is TIMESTAMP WITHOUT TIME ZONE, and the
-rest of the codebase consistently uses naive UTC datetimes (datetime.utcnow()).
-External timestamp strings - a real AWS CloudTrail/Azure/GCP export always
-Z-suffixed - parse to timezone-*aware* datetimes via datetime.fromisoformat,
-which asyncpg then refuses to insert into a naive column ("can't subtract
-offset-naive and offset-aware datetimes"). Confirmed live: a real CloudTrail
-event crashed incident save and dead-lettered after 3 retries. Route every
-external ISO timestamp through this helper instead of calling
-datetime.fromisoformat directly.
+DB timestamp columns are TIMESTAMP WITHOUT TIME ZONE and the app uses naive UTC datetimes. External ISO
+timestamps (CloudTrail/Azure/GCP, Windows events) parse as timezone-aware and would be rejected on insert, so
+route them through these helpers instead of calling datetime.fromisoformat directly.
 """
 
 from datetime import datetime, timezone

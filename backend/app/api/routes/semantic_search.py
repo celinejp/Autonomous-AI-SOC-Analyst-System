@@ -73,27 +73,18 @@ async def semantic_search_incidents(
         if len(query_embedding) != EMBEDDING_DIM:
             raise HTTPException(status_code=500, detail="Embedding dimension mismatch")
         
-        # Format embedding for PostgreSQL
+        # Bound parameters (no string-built SQL): the vector travels as a bind value.
         embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
-        
-        # Query using pgvector cosine similarity with raw SQL
-        # Use string formatting for embedding (safe since we control the values)
-        sql = text(f"""
-            SELECT 
-                id,
-                severity,
-                status,
-                confidence_score,
-                search_text,
-                created_at,
-                1 - (embedding <=> '{embedding_str}'::vector) as similarity
+        sql = text("""
+            SELECT id, severity, status, confidence_score, search_text, created_at,
+                   1 - (embedding <=> CAST(:v AS vector)) AS similarity
             FROM incidents
             WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> '{embedding_str}'::vector
-            LIMIT {request.limit}
+            ORDER BY embedding <=> CAST(:v AS vector)
+            LIMIT :n
         """)
-        
-        result = await db.execute(sql)
+
+        result = await db.execute(sql, {"v": embedding_str, "n": request.limit})
         rows = result.fetchall()
         
         if not rows:
@@ -187,64 +178,3 @@ async def search_mitre_techniques(
                 total=0
             )
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-
-
-@router.post("/incidents/{incident_id}/generate-embedding")
-async def generate_incident_embedding(
-    incident_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Generate and store embedding for a specific incident."""
-    try:
-        # Get incident with report
-        sql = text("""
-            SELECT i.id, i.severity, i.status, 
-                   r.executive_summary, r.technical_findings, r.root_cause
-            FROM incidents i
-            LEFT JOIN incident_reports r ON r.incident_id = i.id
-            WHERE i.id = :incident_id
-        """)
-        result = await db.execute(sql, {"incident_id": incident_id})
-        row = result.fetchone()
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="Incident not found")
-        
-        # Build search text
-        parts = []
-        if row.severity:
-            parts.append(f"Severity: {row.severity}")
-        if row.executive_summary:
-            parts.append(row.executive_summary)
-        if row.technical_findings:
-            parts.append(row.technical_findings[:500])
-        if row.root_cause:
-            parts.append(f"Root cause: {row.root_cause}")
-        
-        search_text = " ".join(parts) if parts else "Security incident"
-        
-        # Generate embedding
-        embedding = await get_embedding(search_text)
-        embedding_str = "[" + ",".join(map(str, embedding)) + "]"
-        
-        # Update incident
-        update_sql = text("""
-            UPDATE incidents
-            SET search_text = :search_text, embedding = CAST(:embedding AS vector)
-            WHERE id = :incident_id
-        """)
-        await db.execute(update_sql, {
-            "search_text": search_text,
-            "embedding": embedding_str,
-            "incident_id": incident_id
-        })
-        await db.commit()
-        
-        return {"status": "success", "incident_id": incident_id, "embedding_dim": len(embedding)}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Embedding generation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-

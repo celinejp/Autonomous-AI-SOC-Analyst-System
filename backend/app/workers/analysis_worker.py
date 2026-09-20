@@ -37,13 +37,16 @@ from app.orchestrator.langgraph_workflow import run_workflow_with_events
 configure_logging(settings.log_level)
 logger = get_logger(__name__)
 
+# Rough per-agent seconds, averaged from 3 timed end-to-end runs with llama3.1 on the dev
+# machine (Ollama, no GPU tuning). Only used for the progress ETA; real time varies with the
+# model, the hardware and how many reflection rounds the Critic asks for.
 AGENT_DURATIONS = {
-    "ingest": 2,
-    "detect": 8,
-    "enrich": 5,
-    "analyze": 15,
-    "critique": 5,
-    "plan_response": 10,
+    "ingest": 1,
+    "detect": 15,
+    "enrich": 8,
+    "analyze": 30,
+    "critique": 30,
+    "plan_response": 32,
 }
 TOTAL_ESTIMATED_SECONDS = sum(AGENT_DURATIONS.values())
 
@@ -128,7 +131,6 @@ async def worker_loop(consumer_name: str) -> None:
     await connect_with_retry()
     await ensure_consumer_group(ANALYSIS_STREAM)
     await ensure_consumer_group(EMBED_STREAM)
-    await ensure_collection("incidents", vector_size=VECTOR_SIZE)
     await ensure_collection("mitre_techniques", vector_size=VECTOR_SIZE)
 
     logger.info("Worker started", consumer=consumer_name)

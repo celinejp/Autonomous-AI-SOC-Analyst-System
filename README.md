@@ -1,465 +1,125 @@
 # Autonomous AI SOC Analyst System
 
-A working, multi-agent Security Operations Center (SOC) analyst system powered by AI, built as a demonstration of agentic reasoning for cybersecurity threat detection and response. See [Detection Accuracy](#detection-accuracy) below for real, measured numbers and known limitations before treating this as production-ready - it isn't, yet, on the free local model it ships with by default.
+A personal project: upload security logs and a chain of six LangGraph agents detects threats, maps them to
+MITRE ATT&CK, writes an incident report with IOCs, and drafts a response plan split by team. It only advises;
+nothing is executed automatically. Runs locally with a free Ollama model.
 
-## Overview
-
-This system autonomously analyzes security logs, detects threats, enriches findings with threat intelligence, performs deep analysis, and generates actionable response plans. It features a multi-agent architecture orchestrated by LangGraph, with reflection loops for self-correction and continuous improvement.
-
-### Key Features
-
-- **6 Specialized AI Agents**: Each with distinct roles (Ingest, Detection, Threat Intel, Analyst, Response Planner, Critic)
-- **LangGraph Orchestration**: State machine with conditional routing and reflection loops
-- **Real-time Processing**: Server-Sent Events (SSE) for live agent execution streaming
-- **MITRE ATT&CK Integration**: 24 native detection rules mapped to specific techniques, plus
-  a separate ~700-technique reference dataset (full MITRE enterprise-attack.json, loaded via
-  `backend/scripts/load_mitre.py`) used for technique lookup, semantic tagging, and search
-- **Multi-Cloud Log Format Parsing**: recognizes AWS CloudTrail, Azure Activity Log, and GCP
-  Audit Log JSON shapes when pasted/uploaded - there is no live connection to AWS, Azure, or
-  GCP (no SDKs, no credentials, no API polling); you export or paste the logs yourself
-- **Enhanced SOC Features**: Structured IOCs (real, see [System Capabilities](#soc-features)),
-  role-based response plans
-- **SOC KPI Metrics**: MTTD, false positive rate, alerts per incident (computed from stored incidents)
-- **Modern Tech Stack**: FastAPI + Next.js 15 + LangGraph + Multi-LLM support
-- **Dockerized**: one-command local stack (Postgres/pgvector, Redis, Qdrant, backend, worker, frontend), structured logging
-- **UI**: shadcn/ui components, Recharts visualizations (severity distribution, attack timeline)
-
-## Architecture
-
-### System Architecture
+## How it works
 
 ```
-┌────────────┐   HTTP + SSE    ┌─────────────┐   enqueue job   ┌───────────────┐
-│  Frontend  │ ◄─────────────► │   Backend   │ ──────────────► │ Redis Streams │
-│ (Next.js)  │                 │  (FastAPI)  │                 │  (job queue)  │
-└────────────┘                 └─────────────┘                 └───────┬───────┘
-                                                                        │ consume
-                                                                        ▼
-┌───────────┐   ┌───────────┐   ┌───────────┐               ┌───────────────────┐
-│ Postgres  │◄──│  Worker   │──►│  Qdrant   │◄──────────────│  Worker runs the  │
-│ +pgvector │   │(LangGraph │   │ (vectors, │               │  6-agent chain    │
-│(incidents)│   │  agents)  │   │  MITRE)   │               │  (see below)      │
-└───────────┘   └─────┬─────┘   └───────────┘               └───────────────────┘
-                       │
-                       ▼
-         Ollama / OpenAI / Groq / Anthropic (LLM calls)
+logs -> Ingest -> Detection -> Threat Intel -> Analyst -> Critic -+-> Response Planner
+                                                  ^______________|  (re-analyze if confidence < 0.7, max 3 rounds)
 ```
 
-There are two paths into the same 6-agent LangGraph chain: `/api/ingest/*` (Upload Logs)
-enqueues a job and returns immediately, and the separate `worker` container picks it up -
-that's why a submitted incident starts in `queued`/`in_progress` and the frontend polls
-until it flips to a final state. `/api/v1/incidents/stream` (Demo Mode) instead runs the
-same workflow inline inside the `backend` process itself and streams progress back over
-SSE, without touching the Redis Streams queue or the worker at all. See
-`STACK_AND_IMPLEMENTATION.md` for the full connectivity breakdown of every route.
+| Agent | Job |
+|---|---|
+| Ingest | Parses raw logs into one schema (code only, no LLM) |
+| Detection | 24 ATT&CK rules + ~15 keyword signatures + LLM judgment; filters duplicates and routine activity |
+| Threat Intel | Adds ATT&CK technique context; LLM-named technique IDs are kept only if a vector search over the MITRE catalogue agrees |
+| Analyst | Incident report: summary, timeline, root cause, IOCs |
+| Critic | Reviews the report and scores confidence |
+| Response Planner | Actions tagged by team (SOC, Network, Endpoint, IAM, Legal, PR, Management) |
 
-### Agent Workflow
+Every LLM call has a timeout and each agent degrades gracefully (rules-only detection, deterministic report, ...).
 
-```
-┌─────────────┐
-│ Ingest Agent│  Parse & normalize security logs (30+ fields, multi-format)
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│Detection    │  AI + rule-based detection (24 native rules + LLM judgment)
-│Agent        │  Generate alerts with severity
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│Threat Intel │  MITRE ATT&CK mapping, similarity search
-│Agent        │  Threat intelligence enrichment
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│Analyst Agent│  Deep analysis, root cause, structured IOCs
-│             │  SOC-aligned incident reports
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│Critic Agent │  Quality review, confidence assessment
-│             │  Evidence corroboration
-└──────┬──────┘
-       │
-       ├─► Low confidence? ──┐
-       │                     │
-       │                     ▼
-       │              [Reflection Loop]
-       │                     │
-       └──► High confidence ─┘
-                    │
-                    ▼
-        ┌───────────────────┐
-        │ Response Planner  │  Role-based actions, team assignments
-        │ Agent             │  Priority-ordered actions per team
-        └───────────────────┘
-```
+**Stack:** FastAPI, LangGraph, Next.js 15, PostgreSQL + pgvector (incident embeddings), Qdrant (MITRE technique
+embeddings), Redis (job queue on Streams, cache, status), SSE for live progress, Docker Compose (6 services).
+LLM providers: Ollama (default, `llama3.1`), OpenAI, Groq, Anthropic.
 
-### Technology Stack
+**Two ways to run an analysis:** upload/analyze is queued on Redis and processed by the `worker` container (the UI
+polls); Demo Mode runs inline and streams progress over SSE.
 
-#### Backend (Python 3.12+)
-- **Framework**: FastAPI (async/await, high performance)
-- **AI/LLM**: Multi-provider support (Ollama, OpenAI, Groq, Anthropic)
-- **Orchestration**: LangGraph (state machine with reflection loops)
-- **Tools**: LangChain (MITRE search, similar-incident search)
-- **Vector DB**: Qdrant (semantic search, threat intelligence)
-- **Primary DB**: PostgreSQL with pgvector (structured data, incidents)
-- **Cache / queue**: Redis (Streams job queue, incident status, rate limiting, API caching)
+**Log formats:** syslog/sshd, Windows Security and Sysmon (event XML, multi-line event blocks, JSON), CEF, Zeek
+conn.log, DNS resolver lines, email-gateway lines, Office 365 audit JSON, AWS CloudTrail, Azure, GCP. Logs are
+pasted or uploaded; nothing connects to a live source. Limits: 5 MB, 5000 lines, 8192 characters per line.
 
-#### Frontend (Next.js 15)
-- **Framework**: Next.js 15 (App Router, React 18)
-- **Language**: TypeScript
-- **UI**: Tailwind CSS + shadcn/ui components
-- **State**: TanStack Query (React Query v5)
-- **Real-time**: Server-Sent Events (SSE)
-- **Charts**: Recharts (timeline, severity distribution) - via `TimelineChart` and related components in `frontend/src/components/charts/`
+## Quick start
 
-## Quick Start
-
-### Prerequisites
-
-- Docker and Docker Compose
-- **LLM Provider** (choose one):
-  - **Ollama** (FREE, recommended) - [Install Ollama](https://ollama.ai/) and run `ollama pull llama3.1`
-  - **Groq** (FREE tier) - [Get API key](https://console.groq.com/)
-  - **OpenAI** (FREE tier available) - [Get API key](https://platform.openai.com/)
-  - **Anthropic** (paid) - [Get API key](https://console.anthropic.com/)
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/celinejp/Autonomous-AI-SOC-Analyst-System.git
-   cd Autonomous-AI-SOC-Analyst-System
-   ```
-
-2. **Set up environment variables**
-   ```bash
-   cp .env.example .env  # Create .env file if needed
-   # Edit .env and configure your LLM provider
-   # For free setup with Ollama:
-   # LLM_PROVIDER=ollama
-   # LLM_MODEL=llama3.1
-   # OLLAMA_BASE_URL=http://localhost:11434
-   ```
-
-3. **Start all services**
-
-   **Option 1: Using start script (Recommended)**
-   ```bash
-   chmod +x start.sh stop.sh
-   ./start.sh
-   ```
-   
-   The start script will:
-   - Check Docker and Ollama are running
-   - Start PostgreSQL, Redis, Qdrant, and Backend API
-   - Wait for services to be healthy
-   - Initialize database automatically
-   - Prompt you to start frontend (Docker or locally)
-   
-   **Option 2: Using Docker Compose**
-   ```bash
-   docker-compose up -d postgres redis qdrant backend
-   # Wait for backend to be healthy, then init DB:
-   docker-compose exec -T backend sh -c "PYTHONPATH=/app python scripts/init_db.py"
-   # Run pgvector migration if needed (for semantic search):
-   docker-compose exec -T postgres psql -U soc_user -d soc_db -f - < backend/scripts/migrations/001_add_pgvector.sql
-   ```
-   
-   This starts:
-   - PostgreSQL (port 5433)
-   - Redis (port 6379)
-   - Qdrant (port 6333)
-   - Backend API (port 8000)
-   - Frontend (port 3000) - if started with Docker
-
-4. **Start Frontend** (if not started with Docker)
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-
-5. **Load MITRE ATT&CK data** (optional)
-   ```bash
-   docker-compose exec backend python scripts/load_mitre.py
-   ```
-
-6. **Access the application**
-   - Frontend: http://localhost:3000
-   - API Docs: http://localhost:8000/docs
-   - Health Check: http://localhost:8000/api/health/basic
-
-**To stop all services:**
-```bash
-./stop.sh
-# or
-docker-compose down
-```
-
-## Usage Guide
-
-### 1. Upload Security Logs
-
-Navigate to `/ingest` and either:
-- Drag and drop a log file (.log, .txt, .json)
-- Paste logs directly
-- Use Demo Mode for pre-configured test scenarios
-
-**Supported formats:**
-- JSON logs
-- Syslog format
-- CEF (Common Event Format)
-- Windows Event Logs
-- **AWS CloudTrail** (format parser)
-- **Azure Monitor** (format parser)
-- **GCP Audit Logs** (format parser)
-
-Cloud formats are recognized by their JSON keys (`eventSource`/`eventName` for CloudTrail,
-`callerIpAddress`/`operationName` for Azure, `protoPayload`/`methodName` for GCP). Nothing is
-pulled from a cloud account - export the events yourself and submit each one as a JSON string
-in the `/api/ingest/analyze` array. Demo Mode and "Generate synthetic" produce plain-text logs,
-not cloud-shaped JSON, so to exercise these parsers you need to supply your own sample.
-
-### 2. Monitor Real-time Analysis
-
-The system will automatically:
-1. Parse logs (Ingest Agent)
-2. Detect threats (Detection Agent) - 24 native detection rules, plus LLM judgment for anything else
-3. Enrich with threat intel (Threat Intel Agent)
-4. Perform deep analysis (Analyst Agent)
-5. Review quality (Critic Agent - with reflection loop if needed)
-6. Generate response plan (Response Planner Agent)
-
-You can watch agent execution in real-time via SSE streaming.
-
-### 3. Review Incident Details
-
-Navigate to `/incidents` to see all incidents, or click on a specific incident to see:
-- Complete analysis report (executive summary, technical findings, IOCs)
-- Attack timeline chart
-- Agent reasoning chain
-- MITRE ATT&CK technique mappings (any of the ~700 loaded techniques, not just the 24 with a native detection rule)
-- Evidence and timeline
-- Actionable response plan with team assignments (update action status)
-
-### 4. Search, Health & Debug
-
-- **Search** (`/search`): Semantic incident search and MITRE ATT&CK technique search.
-- **Health** (`/health`): Basic and deep health checks (API, DB, Redis, Qdrant, agents).
-- **Debug** (`/debug`): Last analysis by incident, agent traces, validation metrics, performance.
-
-### 5. View Insights & Metrics
-
-Navigate to `/insights` for:
-- Severity distribution charts
-- Top MITRE techniques
-- False positive rates
-- Agent performance metrics
-- SOC KPIs (MTTD, false positive rate, alerts per incident)
-
-## 🔧 API Endpoints
-
-### Core Endpoints
-- `GET /api/incidents` - List incidents (with filters, pagination)
-- `GET /api/incidents/{id}` - Get incident details
-- `POST /api/ingest/upload` - Upload log file
-- `POST /api/ingest/analyze` - Analyze logs (JSON array)
-- `GET /api/health/basic` - Basic health check
-- `GET /api/health/deep` - Deep health check (tests all agents)
-
-### SOC Enhancement Endpoints
-- `GET /api/metrics/soc-kpis` - SOC KPI metrics (MTTD, false positive rate, alerts per incident)
-- `GET /api/metrics/attack-coverage` - MITRE ATT&CK coverage (24 techniques)
-
-### Advanced Endpoints
-- `POST /api/v1/incidents/stream` - Demo mode: stream agent execution (SSE)
-- `POST /api/synthetic/generate` - Generate synthetic logs
-- `GET /api/debug/last-analysis/{incident_id}` - Debug agent execution for an incident
-- `GET /api/debug/agent-traces` - Recent agent traces
-- `POST /api/v1/incidents/search/semantic` - Semantic incident search
-- `GET /api/v1/mitre/search` - MITRE technique search
-- `GET /api/v1/performance/metrics` - Performance/Redis metrics
-- `GET /api/v1/validate/aggregate` - Validation aggregate
-
-Full API docs available at `/docs` when running.
-
-## System Capabilities
-
-### Detection Rules (24 Native ATT&CK Techniques)
-
-These 24 are the techniques with a dedicated, hand-written detection rule in
-`backend/app/detection/attack_rules.py` - not the full set of MITRE techniques the system
-knows about. Any of the ~700 techniques loaded into Qdrant (see `scripts/load_mitre.py`) can
-still be looked up, searched, and tagged onto an alert by the Threat Intel agent; these 24
-are just the ones with their own purpose-built detection logic.
-
-The Detection Agent identifies:
-- **Initial Access**: Phishing (T1566.001, T1566.002)
-- **Credential Access**: Brute Force (T1110.001), Password Spraying (T1110.003), LSASS Memory (T1003.001)
-- **Execution**: PowerShell (T1059.001), Command Shell (T1059.003)
-- **Persistence**: Registry Run Keys (T1547.001), Scheduled Tasks (T1053.005), Create Account (T1136.001)
-- **Privilege Escalation**: Bypass UAC (T1548.002)
-- **Defense Evasion**: Clear Event Logs (T1070.001), Disable Tools (T1562.001)
-- **Discovery**: Account Discovery (T1087.001), Network Service Discovery (T1046)
-- **Lateral Movement**: RDP (T1021.001), SMB (T1021.002)
-- **Exfiltration**: Alternative Protocol (T1048.003), Cloud Storage (T1567.002)
-- **Command and Control**: Web Protocols (T1071.001), DNS (T1071.004)
-- **Impact**: Data Encrypted (T1486), Inhibit System Recovery (T1490)
-
-### Enhanced Log Processing (30+ Fields)
-
-- Process information (name, PID, parent process, command line)
-- File information (hashes MD5/SHA256, paths, registry keys)
-- Network information (protocol, bytes, packets, duration)
-- DNS, HTTP, Email fields
-- Geographic and ASN intelligence
-- Cloud-specific fields (AWS region/account, Azure tenant, GCP project)
-
-### SOC Features
-
-- **Structured Incident Reports**: Executive summary, technical findings, timeline, root cause,
-  impact assessment, detection gaps, lessons learned, and structured `indicators_of_compromise`
-  (see below). All of these are persisted and shown on the incident page.
-- **Structured IOCs, for real**: `indicators_of_compromise` is populated two ways and merged:
-  (1) deterministically, straight from the structured `LogEntry` fields already tied to each
-  alert - source/destination IP, file hashes, DNS queries, email addresses - so it's never
-  dependent on the LLM choosing to comply, and (2) the Analyst LLM can add its own
-  judgment-based entries on top. Each entry carries a
-  `confidence` and a severity-derived `recommended_action` (block/monitor/investigate).
-  Persisted via `incident_reports.indicators_of_compromise` (migration
-  `005_add_indicators_of_compromise.sql`) and rendered on the incident page's IOCs table.
-- **Role-Based Response Plans**: Team assignments (SOC, Network, Endpoint, IAM, Legal, PR, Management - whichever the LLM judges relevant per incident)
-- **SOC Metrics**: MTTD, false positive rate, alerts per incident. False positive rate only
-  moves if an incident is marked `false_positive` via `PUT /api/incidents/{id}/status`; the UI
-  has no button for that, so it normally reads 0%.
-
-## Testing the System
-
-### Quick Health Check
+Needs Docker and [Ollama](https://ollama.ai) (`ollama pull llama3.1` and `ollama pull nomic-embed-text`).
 
 ```bash
-# Basic health check (fast, cached for 30s)
-curl http://localhost:8000/api/health/basic
-
-# Deep health check (tests all agents - takes 30-60s)
-curl http://localhost:8000/api/health/deep
-
-# Test workflow with sample logs
-curl -X POST http://localhost:8000/api/health/test-workflow \
-  -H "Content-Type: application/json" \
-  -d '{"logs": ["2024-01-15 10:30:00 AUTH FAILED user=admin src=192.168.1.100"]}'
+cp .env.example .env
+./start.sh                       # starts services, initialises the DB
+docker compose exec backend python scripts/load_mitre.py   # load ~700 MITRE techniques (once)
 ```
 
-### Demo Mode (Frontend)
+UI http://localhost:3000 - API docs http://localhost:8000/docs. Stop with `./stop.sh`.
+Try **Ingest -> Demo Mode**, or upload a log file / paste lines.
 
-1. Navigate to http://localhost:3000/ingest
-2. Click "Demo Mode" tab
-3. Pick a scenario from the dropdown and click "Run Demo Scenario":
-   - Brute Force (T1110)
-   - PowerShell Execution (T1059.001)
-   - RDP Lateral Movement (T1021.001)
-   - Ransomware (T1486)
-   - Cloud IAM Abuse
-   - Port Scan (T1046)
-4. Watch the agents run live over SSE; you're redirected to the resulting incident when it
-   finishes. Demo Mode shows no PASS/FAIL verdict - to check an incident against expected
-   criteria, call `GET /api/debug/validate-incident/{id}` afterward (see `docs/TESTING_GUIDE.md`).
+## Main API endpoints
 
-### Automated Test Suite
+`POST /api/ingest/analyze` and `/upload` (queue an analysis) - `POST /api/v1/incidents/stream` (Demo Mode, SSE) -
+`GET /api/incidents`, `/{id}`, `/{id}/status` - `PUT /api/incidents/{id}/status` (incl. false positive) -
+`PATCH /api/incidents/{id}/response-plan/actions/{action_id}` - `GET /api/metrics/soc-kpis`, `/attack-coverage` -
+`POST /api/v1/incidents/search/semantic`, `GET /api/v1/mitre/search` - `GET /api/health/basic|deep`.
 
-```bash
-# E2E tests (backend must be running at http://localhost:8000)
-./test_all_features.sh
+## Testing and data
 
-# Or run the Python test script
-cd backend && PYTHONPATH=. python scripts/test_all_features.py
+- **Unit tests (123, ~2 s, no services):** `cd backend && pytest -m "not integration"`. They cover the parsers,
+  reachability of all 24 rules, real-pipeline detection accuracy (no LLM), the LLM-dependent code paths with a fake
+  model (retries, fallbacks, timeouts, the reflection loop), input limits, prompt-injection handling and IOC
+  extraction. CI runs these.
+- **Integration tests (15):** need the full stack and Ollama (~25 min); synthetic fixtures plus three real public
+  captures through all six agents. `pytest tests/test_system_health.py -m integration`.
+- **Evaluation scripts** (real model / real data): `scripts/eval_detection_metrics.py`,
+  `scripts/eval_holdout_generalization.py`, `scripts/eval_public_datasets.py`, `scripts/eval_false_positives.py`.
 
-# Pytest integration tests (require the full stack running; unit tests run without -m integration)
-cd backend
-pytest tests/test_system_health.py -v -m integration --timeout=120
-```
+### Test data
 
-### Detection Accuracy
+1. **Public attack datasets (real telemetry).** `scripts/eval_public_datasets.py` downloads them into the
+   git-ignored `backend/data/public/` and runs the detection layer (rules only, no LLM):
+   - [Splunk attack_data](https://github.com/splunk/attack_data) - real Atomic Red Team captures, one folder per
+     ATT&CK technique ID.
+   - [EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) - real Windows/Sysmon events
+     labeled by ATT&CK tactic.
+2. **Generated benign noise** (`scripts/eval_false_positives.py`, seeded): realistic ordinary Windows activity incl. look-alikes
+   (admin `net user`, `curl` to an internal API, control-panel `rundll32`, updater services and Run keys). Used to
+   measure false positives, alone and mixed with the real attack captures.
+3. **Synthetic, hand-written by the author:** 25 labeled fixture cases, two held-out sets (10 + 8 cases in other
+   formats), one sample per rule, and the UI demo scenarios.
 
-Two measurements, answering two different questions. Both are real runs through the live
-Docker stack (ingest → detection → threat intel enrichment) with `LLM_PROVIDER=ollama`,
-`LLM_MODEL=llama3.1` - the same free local model this project ships with by default.
+### Results (20 Sep 2026, llama3.1 via Ollama)
 
-| | Fixture regression check | Held-out generalization check |
-|---|---|---|
-| Script | `eval_detection_metrics.py --mode llm --enrich` | `eval_holdout_generalization.py` |
-| Data | 25 cases in `backend/data/labeled_incidents.json` + `backend/tests/fixtures/test_logs.json` | 10 cases in `backend/data/holdout_generalization_cases.json`, in log formats/wording (Windows Event, Sysmon, CEF, Zeek/Bro, Kubernetes JSON, email gateway) that appear nowhere in the fixtures above |
-| What it answers | "did anything regress" | "does detection generalize to logs it wasn't tuned on" |
-| Alert-level accuracy / precision / recall / F1 | 1.0 / 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 (last run; has ranged 0.87-1.0 F1 across repeated runs) |
-| MITRE technique precision / recall / F1 | 0.944 / 0.548 / 0.693 | - |
+| Test | Result |
+|---|---|
+| **Splunk attack_data**, rules only, up to 4 real captures per ATT&CK technique | **24 of 24 rules fire on real logs** (4 of 24 before the parser and rule fixes this data revealed) |
+| Same, with the LLM on 24 small real captures | rules + LLM alert on 21 of 24; the LLM itself named the right technique family on only 2 |
+| **EVTX-ATTACK-SAMPLES**, rules only, 249 real sample files across 8 tactics | Alert on 92 (37%), modest because 24 rules cover a small slice of ATT&CK |
+| **False positives**, rules, 100 generated benign batches (15,000 events, incl. look-alikes) | Alert in 1% of batches, 0.1 alerts per 1000 events (**was 100% of batches / 29.7 per 1000 before tightening five rules**) |
+| **Recall in noise**: 20 real attack captures blended into 300 benign events | Target rule still fires in 20 of 20 |
+| LLM on real data, llama3.1 / gpt-oss-120b (cloud) | On 24 small real captures the LLM itself named the right technique family in 2 / 4; on 20 real attacks the rules missed it raised an alert on 7 / 10 (technique not checked) |
+| LLM on 12 benign batches, llama3.1 / gpt-oss-120b (cloud) | 0 / 1 batches with an LLM-only alert |
+| Fixtures, 25 synthetic cases (LLM) | F1 1.0; 0 false positives; technique precision / recall 0.944 / 0.548 |
+| Held-out v1 / v2, synthetic (LLM) | F1 0.933 / 1.0, identical over 3 runs each |
+| Latency, end to end | 115-201 s per analysis on local llama3.1 (LLM-bound) |
 
-**Read the fixture score with a grain of salt**: those cases were written to match the
-detection rules' own keyword expectations, so a perfect 1.0 there is close to
-self-grading, not evidence of real-world generalization - it only proves nothing broke.
-The held-out score is the more meaningful one, and it moves between runs because
-`llama3.1` isn't perfectly deterministic; treat any single run (including the one above)
-as a snapshot, not a guarantee, and re-run it yourself before relying on it.
+How to read this: on real logs the deterministic rules do the work and the LLM adds little (even the much larger
+cloud model names the technique family in only 4 of 24), so detection quality depends on the rules; the LLM's value
+is the report, timeline and response plan. The public data is attack-only, so false positives are measured on the
+generated benign noise, which is synthetic and written by the author, so it is a sanity check, not production noise. The synthetic sets
+were written next to the rules, so 1.0 there is close to self-grading. Splunk/EVTX labels are per file, not per
+event. Six rules that public data couldn't exercise (port scan, beaconing, DNS tunnelling, ransomware, phishing
+links, cloud upload) were replaced with techniques it does contain; ransomware, port scans, C2 and DNS tunnelling are
+still caught by the keyword signatures and the LLM. Reproduce: `python scripts/eval_public_datasets.py [--llm]`.
 
-**Known, accepted limitation**: across 20 real analyst-agent runs, ~5% produced JSON the
-parser couldn't recover even after one retry. `analyst_agent.py` guards against this - it
-falls back to a deterministic placeholder report rather than crashing or silently
-corrupting data, so the incident is always saved, just occasionally with a lower-quality
-report. This is a `llama3.1` capability ceiling, not an unhandled bug; a larger/hosted
-model would reduce it further.
+## Notes
 
-**In short: the system reliably tells real attacks from noise, including on log formats
-it has never seen, and correctly maps them to the right MITRE technique family. Where it
-is weaker is precision at the individual sub-technique level and occasional report-quality
-degradation under its default free, local model - both fail safely rather than silently.**
+- **No login:** it is a personal, local project. Do not expose it to an untrusted network.
+- **Prompt injection:** log text is sanitised, wrapped in untrusted-data markers, and instruction-like phrases
+  become their own alert. It reduces the risk; it is not proof against a determined attacker.
+- **LLM limits:** llama3.1 sometimes returns malformed JSON (~5% of analyst runs use the fallback report) and is
+  sensitive to prompt wording, so critical rules are enforced in code. The LLM sees up to 100 lines verbatim
+  (statistics plus a sample for larger batches); the rules see every line.
+- **Not done:** TLS, IOC enrichment (VirusTotal etc.), private-IP filtering for IOCs, PDF export (incidents can be
+  downloaded as JSON), deployment, load testing.
 
-Reproduce with:
-```bash
-cd backend
-python scripts/eval_detection_metrics.py --mode llm --enrich
-python scripts/eval_holdout_generalization.py
-```
-
-## Security Considerations
-
-- API keys stored in environment variables
-- Input validation via Pydantic models
-- SQL injection protection via SQLAlchemy ORM
-- CORS configured for specific origins
-- Error handling with secure error messages
-
-## Project Structure
+## Project layout
 
 ```
-Autonomous-AI-SOC-Analyst-System/
-├── backend/
-│   ├── app/
-│   │   ├── agents/          # 6 AI agents
-│   │   ├── tools/           # LangChain tools (MITRE search, similar-incident search)
-│   │   ├── orchestrator/    # LangGraph workflow
-│   │   ├── api/routes/      # FastAPI endpoints (health, incidents, ingest, stream, dashboard, metrics, debug, synthetic, semantic search, validation, performance)
-│   │   ├── models/          # Pydantic models (incident, log_entry, agent state)
-│   │   ├── database/        # DB connections & models
-│   │   ├── detection/       # ATT&CK-native detection rules (24 techniques)
-│   │   ├── services/        # Business logic (incidents, metrics, embeddings, synthetic data)
-│   │   └── core/            # Config, logging, LLM factory
-│   ├── scripts/             # Data generation, DB init, migrations
-│   └── tests/               # Test suite with fixtures
-├── frontend/
-│   └── src/
-│       ├── app/             # Next.js pages (dashboard, ingest, incidents, incident/[id], search, insights, health, debug)
-│       ├── components/     # UI components (charts, DemoStreamViewer, ResponsePlanViewer, Navigation, etc.)
-│       ├── lib/             # API client, utilities
-│       └── types/           # TypeScript definitions
-├── docker-compose.yml
-├── start.sh                 # Start all services script
-├── stop.sh                  # Stop all services script
-├── test_all_features.sh     # E2E API test script
-├── IMPLEMENTATION_STATUS.md # Implementation and API ↔ UI reference
-├── STACK_AND_IMPLEMENTATION.md # Stack, connectivity, and what's wired
-└── README.md
+backend/app/{agents,detection,orchestrator,api/routes,services,database,core,tools,workers}
+backend/{scripts,data,tests}      frontend/src/{app,components,hooks,lib}
+docker-compose.yml  start.sh  stop.sh  .github/workflows/ci.yml
 ```
+
+More: `STACK_AND_IMPLEMENTATION.md` (what is wired to what), `MITRE_ATTACK_EXPLAINED.md` (the 24 rules),
+`docs/TESTING_GUIDE.md`.

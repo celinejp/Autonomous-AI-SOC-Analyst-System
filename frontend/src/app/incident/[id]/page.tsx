@@ -166,6 +166,15 @@ export default function IncidentDetailPage() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => handleStatusUpdate(IncidentStatus.FALSE_POSITIVE)}
+              disabled={updateStatusMutation.isPending || incident.status === IncidentStatus.FALSE_POSITIVE}
+            >
+              <XCircle className="h-4 w-4 mr-2" />
+              Mark as False Positive
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleDownloadJSON}
             >
               <Download className="h-4 w-4 mr-2" />

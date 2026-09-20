@@ -5,7 +5,8 @@ import time
 from typing import Dict, Any
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, Body, HTTPException
+
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -90,7 +91,7 @@ async def check_qdrant() -> HealthCheckResult:
     try:
         start = time.time()
         client = get_qdrant_client()
-        collections = client.get_collections()
+        client.get_collections()
         latency = (time.time() - start) * 1000
         return HealthCheckResult(status="pass", latency_ms=round(latency, 2))
     except Exception as e:
@@ -105,7 +106,7 @@ async def check_ollama() -> Dict[str, Any]:
         llm = get_llm()
         
         # Try a simple invocation with timeout
-        response = await asyncio.wait_for(
+        await asyncio.wait_for(
             llm.ainvoke("Say 'OK' if you are working."),
             timeout=10.0
         )
@@ -157,7 +158,7 @@ async def test_agent(agent_name: str, test_state: AgentState) -> AgentHealthResu
             )
         
         # Run agent with timeout
-        result = await asyncio.wait_for(
+        await asyncio.wait_for(
             agent_func(test_state.copy()),
             timeout=30.0
         )

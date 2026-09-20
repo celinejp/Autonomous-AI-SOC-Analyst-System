@@ -1,4 +1,4 @@
-"""Embedding + vector sync service (Postgres pgvector + Qdrant dual-write)."""
+"""Incident embedding sync: writes each incident's embedding to Postgres (pgvector)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.database.vector_store import upsert_vectors, VECTOR_SIZE
+from app.database.vector_store import VECTOR_SIZE
 from app.services.embedding_service import get_embedding, EMBEDDING_DIM
 
 logger = get_logger(__name__)
@@ -43,8 +43,8 @@ async def build_incident_search_text(session: AsyncSession, incident_id: str) ->
 
 async def sync_incident_vectors(session: AsyncSession, incident_id: str) -> dict:
     """
-    Write embedding to Postgres (source of truth) then upsert to Qdrant.
-    Idempotent — safe to retry from the embed job queue.
+    Write the incident's embedding to Postgres/pgvector. Idempotent - safe to retry from the
+    embed job queue.
     """
     search_text = await build_incident_search_text(session, incident_id)
     if search_text is None:
@@ -68,24 +68,6 @@ async def sync_incident_vectors(session: AsyncSession, incident_id: str) -> dict
         },
     )
     await session.commit()
-
-    # Dual-write to Qdrant for agent similarity tool (best-effort after Postgres commit)
-    try:
-        await upsert_vectors(
-            collection_name="incidents",
-            vectors=[embedding],
-            payloads=[
-                {
-                    "incident_id": incident_id,
-                    "search_text": search_text[:500],
-                }
-            ],
-            ids=[incident_id],
-        )
-    except Exception as e:
-        # Postgres already has the vector; Qdrant can catch up on retry
-        logger.warning("Qdrant dual-write failed; will retry via queue", error=str(e))
-        raise
 
     return {
         "incident_id": incident_id,

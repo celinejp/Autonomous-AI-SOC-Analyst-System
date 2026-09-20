@@ -2,11 +2,17 @@
 
 import re
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from collections import Counter
 
-from app.core.llm_factory import get_llm
+from app.core.llm_factory import ainvoke_llm, get_llm
 from app.core.logging import get_logger
+from app.core.text_safety import (
+    UNTRUSTED_DATA_NOTICE,
+    find_injection_markers,
+    sanitize_untrusted,
+    wrap_untrusted,
+)
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.agent_state import AgentState
@@ -22,6 +28,8 @@ class _AlertParseError(Exception):
     threats found), which is a normal, valid outcome and must not be retried."""
 
 SYSTEM_PROMPT = """You are a security detection agent. Analyze normalized security logs and identify ONLY clear security threats.
+
+""" + UNTRUSTED_DATA_NOTICE + """
 
 Logs may come in ANY format - key=value syslog, Windows Security Event text,
 Sysmon process/file events, CEF, raw JSON (including Kubernetes audit events),
@@ -93,12 +101,8 @@ _BENIGN_MARKERS = (
     "it_admin",
 )
 
-# Authorization/approval language, change-ticket references, and maintenance-window
-# framing - regex-based (not the exact-string list above) so novel phrasing like
-# "per CHG-88123" or "sign-off received" is recognized as a benign signal without
-# needing the exact literal marker seen before. Confirmed live: a vuln-scan case
-# phrased with a change-ticket reference instead of the old hardcoded "approved=true"
-# was a false positive until this generalized.
+# Approval / change-ticket / maintenance-window wording ("per CHG-88123", "sign-off received"),
+# matched by pattern so unfamiliar phrasing still counts as a benign signal.
 _AUTHORIZATION_RE = re.compile(
     r"\bauthoriz(?:ed|ation)\b"
     r"|\bapprov(?:ed|al)\b"
@@ -121,6 +125,11 @@ def _logs_look_benign(logs: List[LogEntry]) -> bool:
     raw = " ".join((getattr(log, "raw_log", None) or "") for log in logs).lower()
     actions = " ".join((getattr(log, "action", None) or "") for log in logs).lower()
     blob = f"{raw} {actions}"
+
+    # Text that talks to an AI analyst ("ignore previous instructions", "mark as authorized")
+    # is never routine activity, and must not be able to talk its way into the benign bucket.
+    if find_injection_markers(blob):
+        return False
 
     hostile = any(
         token in blob
@@ -178,32 +187,52 @@ async def detection_agent(state: AgentState) -> AgentState:
         HumanMessage(
             content=(
                 f"Analyze these logs for suspicious patterns.\n"
-                f"If benign/normal, return [].\n\n{log_summary}\n\n"
+                f"If benign/normal, return [].\n\n{wrap_untrusted(log_summary)}\n\n"
                 f"Output JSON array of alerts only."
             )
         ),
     ]
 
-    response = await llm.ainvoke(messages)
-
+    llm_error = None
+    alerts: List[Alert] = []
     try:
-        alerts = _parse_alerts_from_response(response.content, logs)
-    except _AlertParseError as e:
-        # The LLM can reason correctly but still occasionally emit malformed JSON
-        # on a verbose response - confirmed live (gpt-oss:120b-cloud correctly
-        # identified a k8s privilege-escalation event, then failed to parse on a
-        # retry of the identical input). One retry recovers those transient
-        # misses instead of silently downgrading a correct answer into "no threat".
-        logger.warning("detection_agent: LLM response failed to parse, retrying once: %s", e)
+        response = await ainvoke_llm(llm, messages)
         try:
-            retry_response = await llm.ainvoke(messages)
-            alerts = _parse_alerts_from_response(retry_response.content, logs)
-        except _AlertParseError as e2:
-            logger.warning("detection_agent: retry also failed to parse, defaulting to no LLM alerts: %s", e2)
-            alerts = []
+            alerts = _parse_alerts_from_response(response.content, logs)
+        except _AlertParseError as e:
+            # Malformed JSON is usually transient: retry once.
+            logger.warning("detection_agent: LLM response failed to parse, retrying once: %s", e)
+            try:
+                retry_response = await ainvoke_llm(llm, messages)
+                alerts = _parse_alerts_from_response(retry_response.content, logs)
+            except _AlertParseError as e2:
+                logger.warning("detection_agent: retry also failed to parse, defaulting to no LLM alerts: %s", e2)
+    except Exception as e:  # LLM down / timed out: keep going on the deterministic rules alone
+        llm_error = f"{type(e).__name__}: {e}"
+        logger.error("detection_agent: LLM call failed, continuing with rules only: %s", llm_error)
 
+    alerts.extend(deterministic_alerts(logs))
+    alerts = _filter_alerts(alerts, logs)
+
+    state["alerts"] = alerts
+    state["agent_execution_log"].append(
+        {
+            "agent_name": "detection",
+            "timestamp": datetime.utcnow().isoformat(),
+            "duration_ms": (datetime.utcnow() - _started_at).total_seconds() * 1000,
+            "output_data": {"logs_analyzed": len(logs), "alerts_generated": len(alerts), "llm_error": llm_error},
+        }
+    )
+    return state
+
+
+def deterministic_alerts(logs: List[LogEntry]) -> List[Alert]:
+    """Every alert that does not need an LLM: the ATT&CK rule engine, the signature/threshold
+    rules, and the prompt-injection check. Shared by the live agent and the rules-only
+    evaluation/tests so both exercise exactly the same code."""
     from app.detection.attack_rules import evaluate_attack_rules
 
+    alerts: List[Alert] = []
     for attack_alert in evaluate_attack_rules(logs):
         alerts.append(
             Alert(
@@ -222,32 +251,113 @@ async def detection_agent(state: AgentState) -> AgentState:
                 ],
             )
         )
-
     alerts.extend(_rule_based_detection(logs))
-    alerts = _filter_alerts(alerts, logs)
+    alerts.extend(_prompt_injection_alerts(logs))
+    return alerts
 
-    state["alerts"] = alerts
-    state["agent_execution_log"].append(
-        {
-            "agent_name": "detection",
-            "timestamp": datetime.utcnow().isoformat(),
-            "duration_ms": (datetime.utcnow() - _started_at).total_seconds() * 1000,
-            "output_data": {"logs_analyzed": len(logs), "alerts_generated": len(alerts)},
-        }
+
+def detect_rules_only(logs: List[LogEntry]) -> List[Alert]:
+    """Detection without the LLM (rules + filters)."""
+    return _filter_alerts(deterministic_alerts(logs), logs)
+
+
+def _prompt_injection_alerts(logs: List[LogEntry]) -> List[Alert]:
+    """Log content that reads like an instruction to an AI model is reported, not obeyed.
+    Deterministic, so it does not depend on the LLM being un-fooled."""
+    hits = []
+    for i, log in enumerate(logs):
+        markers = find_injection_markers(log.raw_log or "")
+        if markers:
+            hits.append((i, markers[0]))
+    if not hits:
+        return []
+    return [
+        Alert(
+            timestamp=datetime.utcnow(),
+            severity=Severity.MEDIUM,
+            title="Possible prompt-injection attempt in log content",
+            description=(
+                f"{len(hits)} log line(s) contain text that looks like an instruction to an AI "
+                "analyst (for example 'ignore previous instructions'). Treat the surrounding "
+                "activity as suspicious and review manually."
+            ),
+            detection_rule="rule:prompt_injection",
+            related_logs=[str(i) for i, _ in hits],
+            mitre_techniques=[],
+            evidence=[{"rule": "rule:prompt_injection", "phrase": phrase[:80]} for _, phrase in hits[:3]],
+        )
+    ]
+
+
+MAX_VERBATIM_LOGS = 100   # lines shown to the LLM one by one
+HEAD_LINES = 60           # when the batch is larger: first N lines verbatim...
+SAMPLED_LINES = 40        # ...plus this many more, spread over the rest (failures first)
+
+
+def _format_log_line(i: int, log: LogEntry) -> str:
+    """One prompt line. Includes the structured fields the detection prompt tells the model to
+    check (byte counts, DNS name, process/command line), not just the raw text."""
+    extras = []
+    if log.bytes_out or log.bytes_in:
+        extras.append(f"bytes_out={log.bytes_out} bytes_in={log.bytes_in}")
+    if log.dns_query:
+        extras.append(f"dns={sanitize_untrusted(log.dns_query, 100)}")
+    if log.process_name or log.command_line:
+        extras.append(f"proc={sanitize_untrusted(str(log.process_name), 80)} cmd={sanitize_untrusted(str(log.command_line), 150)}")
+    if log.event_id:
+        extras.append(f"event_id={log.event_id}")
+    return (
+        f"{i}: [{log.timestamp}] {log.log_source.value} | "
+        f"src={log.source_ip} dst={log.destination_ip}:{log.destination_port} | "
+        f"user={sanitize_untrusted(str(log.user), 80)} | action={log.action} | status={log.status} | "
+        + (" | ".join(extras) + " | " if extras else "")
+        + f"raw={sanitize_untrusted(log.raw_log or '', 400)}"
     )
-    return state
+
+
+def _aggregate_logs(logs: List[LogEntry]) -> str:
+    """Whole-batch statistics per source IP, so large inputs are still visible to the LLM as
+    counts (failures, distinct ports/hosts, bytes) instead of being cut off after N lines."""
+    by_src: Dict[str, Dict] = {}
+    for log in logs:
+        d = by_src.setdefault(log.source_ip, {"n": 0, "fail": 0, "ports": set(), "hosts": set(), "out": 0})
+        d["n"] += 1
+        d["fail"] += 1 if (log.status or "").lower() == "failure" else 0
+        if log.destination_port:
+            d["ports"].add(log.destination_port)
+        if log.destination_ip:
+            d["hosts"].add(log.destination_ip)
+        d["out"] += log.bytes_out or 0
+    top = sorted(by_src.items(), key=lambda kv: (-kv[1]["fail"], -len(kv[1]["ports"]), -kv[1]["n"]))[:15]
+    lines = [f"BATCH STATISTICS over all {len(logs)} lines (per source IP, top {len(top)}):"]
+    for ip, d in top:
+        lines.append(
+            f"- {ip}: events={d['n']} failures={d['fail']} distinct_dst_ports={len(d['ports'])} "
+            f"distinct_dst_hosts={len(d['hosts'])} bytes_out={d['out']}"
+        )
+    return "\n".join(lines)
 
 
 def _create_log_summary(logs: List[LogEntry]) -> str:
-    summary_lines = []
-    for i, log in enumerate(logs[:100]):
-        summary_lines.append(
-            f"{i}: [{log.timestamp}] {log.log_source.value} | "
-            f"src={log.source_ip} dst={log.destination_ip}:{log.destination_port} | "
-            f"user={log.user} | action={log.action} | status={log.status} | "
-            f"raw={(log.raw_log or '')[:500]}"
-        )
-    return "\n".join(summary_lines)
+    """Batches up to 100 lines are shown verbatim. Larger batches show whole-batch statistics,
+    the first 60 lines, and 40 more lines chosen from the rest (failures first, then evenly
+    spaced), each keeping its original index so alerts can cite them."""
+    if len(logs) <= MAX_VERBATIM_LOGS:
+        return "\n".join(_format_log_line(i, log) for i, log in enumerate(logs))
+
+    rest = list(range(HEAD_LINES, len(logs)))
+    fail_set = {i for i in rest if (logs[i].status or "").lower() == "failure"}
+    failures = sorted(fail_set)[: SAMPLED_LINES // 2]          # failures are the interesting lines
+    others = [i for i in rest if i not in fail_set]
+    budget = SAMPLED_LINES - len(failures)
+    step = max(1, len(others) // max(budget, 1))
+    chosen = sorted(set(failures + others[::step][:budget]))
+    shown = list(range(HEAD_LINES)) + chosen
+    return (
+        _aggregate_logs(logs)
+        + f"\n\nSHOWING {len(shown)} OF {len(logs)} LINES (original indices):\n"
+        + "\n".join(_format_log_line(i, logs[i]) for i in shown)
+    )
 
 
 def _parse_alerts_from_response(content: str, logs: List[LogEntry]) -> List[Alert]:
@@ -285,11 +395,7 @@ def _parse_alerts_from_response(content: str, logs: List[LogEntry]) -> List[Aler
             # Drop speculative low LLM alerts
             if sev_raw == "low":
                 continue
-            # Alert.evidence is List[Dict[str, Any]], but the prompt asks the LLM for
-            # "short strings" - a capable, instruction-following model (confirmed live
-            # with gpt-oss:120b-cloud) does exactly that and fails Pydantic validation
-            # every time, silently dropping an otherwise-correct alert. Normalize
-            # either shape instead of trusting the LLM to guess our internal schema.
+            # The prompt asks for evidence as short strings but Alert.evidence holds dicts: accept both.
             raw_evidence = alert_data.get("evidence", []) or []
             evidence = [e if isinstance(e, dict) else {"note": str(e)} for e in raw_evidence]
             alert = Alert(
@@ -310,6 +416,22 @@ def _parse_alerts_from_response(content: str, logs: List[LogEntry]) -> List[Aler
     return alerts
 
 
+BRUTE_FORCE_MIN_FAILURES = 3  # same threshold as the deterministic counter rule
+
+
+def _claims_brute_force(alert: Alert) -> bool:
+    return "brute" in (alert.title or "").lower() or any(t.split(".")[0] == "T1110" for t in alert.mitre_techniques)
+
+
+def _has_failure_burst(logs: List[LogEntry]) -> bool:
+    """True if any single source IP has at least BRUTE_FORCE_MIN_FAILURES failed authentications."""
+    failures = Counter(
+        log.source_ip for log in logs
+        if log.auth_result == "failure" or (log.log_source.value == "auth" and log.status == "failure")
+    )
+    return any(n >= BRUTE_FORCE_MIN_FAILURES for n in failures.values())
+
+
 def _filter_alerts(alerts: List[Alert], logs: List[LogEntry]) -> List[Alert]:
     """Deduplicate and suppress alerts on likely-benign traffic when only LLM noise exists."""
     if not alerts:
@@ -327,6 +449,8 @@ def _filter_alerts(alerts: List[Alert], logs: List[LogEntry]) -> List[Alert]:
         if not is_rule:
             if alert.severity == Severity.LOW:
                 continue
+            if _claims_brute_force(alert) and not _has_failure_burst(logs):
+                continue  # a typo or two is not brute force; enforced here, not left to the model
             # Keep medium+ LLM alerts that have a concrete title (not empty fluff)
             title = (alert.title or "").strip().lower()
             if not title or title in ("suspicious activity detected", "alert"):
@@ -347,12 +471,32 @@ def _filter_alerts(alerts: List[Alert], logs: List[LogEntry]) -> List[Alert]:
         # they're volumetric thresholds that can have a legitimate cause (a mistyped
         # password, an authorized vuln scan), so _rule_based_detection already skips
         # generating them at all on benign traffic - nothing to re-admit here.
+        # ATT&CK-rule alerts are only kept here when critical (log clearing, LSASS dump,
+        # ransomware, Defender disabled...); discovery/logon/account rules can be legitimate
+        # admin work, which is exactly what this branch is judging.
         kept = [
             a
             for a in kept
-            if (a.detection_rule or "").startswith("ATT&CK Rule")
-            or (a.detection_rule or "").startswith("rule:")
+            if (a.detection_rule or "").startswith("rule:")
+            or ((a.detection_rule or "").startswith("ATT&CK Rule") and a.severity == Severity.CRITICAL)
         ]
+
+    # A keyword signature and an ATT&CK rule that report the same technique family are one
+    # finding, not two: keep the ATT&CK-rule alert (it points at the exact matching lines).
+    covered = {
+        t.split(".")[0]
+        for a in kept if (a.detection_rule or "").startswith("ATT&CK Rule")
+        for t in a.mitre_techniques
+    }
+    kept = [
+        a for a in kept
+        if not (
+            ((a.detection_rule or "").startswith("rule:") or a.detection_rule in ("multiple_failed_logins", "port_scanning"))
+            and a.detection_rule != "rule:prompt_injection"
+            and a.mitre_techniques
+            and all(t.split(".")[0] in covered for t in a.mitre_techniques)
+        )
+    ]
 
     return kept
 
@@ -368,7 +512,12 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
     # down, which match specific attack tooling/patterns and stay unconditional.
     is_benign = _logs_look_benign(logs)
 
-    def add(title: str, description: str, rule: str, severity: Severity, techniques: List[str]):
+    def matching(*needles: str) -> List[str]:
+        idx = [str(i) for i, log in enumerate(logs) if any(n in (log.raw_log or "").lower() for n in needles)]
+        return idx[:50]
+
+    def add(title: str, description: str, rule: str, severity: Severity, techniques: List[str],
+            related: Optional[List[str]] = None):
         alerts.append(
             Alert(
                 timestamp=datetime.utcnow(),
@@ -376,7 +525,9 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
                 title=title,
                 description=description,
                 detection_rule=rule,
-                related_logs=[str(i) for i in range(min(10, len(logs)))],
+                # Exact lines that triggered the rule (IOC extraction reads these); the old
+                # "first 10 logs" is only the fallback when nothing more specific is known.
+                related_logs=related or [str(i) for i in range(min(10, len(logs)))],
                 mitre_techniques=techniques,
                 evidence=[{"rule": rule, "match": True}],
             )
@@ -386,7 +537,7 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
     failed_logins_by_ip = Counter()
     for log in logs:
         raw = (log.raw_log or "").lower()
-        if (
+        if log.auth_result == "failure" or (
             log.log_source.value == "auth"
             and log.action in ["login_attempt", "login_failed"]
             and log.status == "failure"
@@ -405,6 +556,11 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
                 "multiple_failed_logins",
                 severity,
                 ["T1110"],
+                related=[
+                    str(i) for i, log in enumerate(logs)
+                    if log.source_ip == ip and (log.status == "failure" or "auth failed" in (log.raw_log or "").lower()
+                                                or "failed password" in (log.raw_log or "").lower())
+                ][:50],
             )
 
     # Port scanning (many distinct ports)
@@ -420,6 +576,7 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
                 "port_scanning",
                 Severity.HIGH,
                 ["T1046"],
+                related=[str(i) for i, log in enumerate(logs) if log.source_ip == ip and log.destination_port][:50],
             )
 
     # Signature rules (high precision keywords)
@@ -484,7 +641,7 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
             ["T1567"],
         ),
         (
-            "interval=300s" in blob or ("beacon" in blob) or ("c2" in blob and "connect" in blob),
+            "interval=300s" in blob or ("beacon" in blob) or (re.search(r"\bc2\b", blob) is not None and "connect" in blob),
             "C2 beaconing pattern",
             "Periodic outbound connections consistent with C2",
             "rule:c2",
@@ -549,9 +706,25 @@ def _rule_based_detection(logs: List[LogEntry]) -> List[Alert]:
     ]
 
     # Skip signature alerts when traffic is clearly approved/benign
+    signature_needles = {
+        "rule:ransomware": ("readme_decrypt", "cryptor.exe", "ransom"),
+        "rule:cred_dump": ("mimikatz", "lsass"),
+        "rule:phishing": ("macro execution", ".docm", "attachment opened", "phishing.com"),
+        "rule:lateral": ("rdp connect", "admin share access", "c$"),
+        "rule:sqli": ("union select", "or '1'='1", "drop table", "sql injection"),
+        "rule:privesc": ("privilege change",),
+        "rule:exfil": ("http post", "2gb", "exfil", "anonymous-storage"),
+        "rule:c2": ("interval=300s", "beacon", "c2"),
+        "rule:injection": ("memory write",),
+        "rule:persistence": ("registry modify",),
+        "rule:webshell": ("webshell", "shell.aspx", "?cmd=", "wwwroot"),
+        "rule:dns": ("dns query", "tunnel", "type=txt", "dga", "evil-dns"),
+        "rule:ddos": ("http request",),
+        "rule:supply_chain": ("compromised", "software update", "child=powershell"),
+    }
     if not is_benign:
         for matched, title, desc, rule, sev, techs in signatures:
             if matched:
-                add(title, desc, rule, sev, techs)
+                add(title, desc, rule, sev, techs, related=matching(*signature_needles.get(rule, ())) or None)
 
     return alerts

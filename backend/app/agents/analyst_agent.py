@@ -3,8 +3,9 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from app.core.llm_factory import get_llm
+from app.core.llm_factory import ainvoke_llm, get_llm
 from app.core.logging import get_logger
+from app.core.text_safety import UNTRUSTED_DATA_NOTICE, sanitize_untrusted, wrap_untrusted
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.models.agent_state import AgentState
@@ -20,12 +21,14 @@ class _ReportParseError(Exception):
 
 SYSTEM_PROMPT = """You are a Tier 2 SOC Analyst performing deep investigation.
 
+""" + UNTRUSTED_DATA_NOTICE + """
+
 Return ONLY valid JSON with this exact schema:
 {
   "executive_summary": "2-3 sentences, business impact focus, no jargon, includes severity/urgency",
   "technical_findings": "attack timeline, MITRE ATT&CK techniques observed (with IDs), and scope assessment",
   "timeline": [{"timestamp": "2026-08-30T10:15:00", "event": "what happened", "severity": "low|medium|high|critical"}],
-  "affected_assets": ["<actual hostnames/IPs from the alerts above, e.g. 203.0.113.55>"],
+  "affected_assets": ["<actual hostnames/IPs taken from the alerts above>"],
   "root_cause": "initial access vector, vulnerabilities/misconfigurations exploited, contributing factors",
   "impact_assessment": "business/data impact and regulatory considerations",
   "confidence_score": 0.0,
@@ -60,7 +63,7 @@ async def analyst_agent(state: AgentState) -> AgentState:
 
     # Prepare analysis context
     alerts_summary = "\n".join([
-        f"Alert {i+1}: [{a.severity.value}] {a.title}\n  {a.description}\n  MITRE: {', '.join(a.mitre_techniques)}"
+        f"Alert {i+1}: [{a.severity.value}] {sanitize_untrusted(a.title, 200)}\n  {sanitize_untrusted(a.description, 500)}\n  MITRE: {', '.join(a.mitre_techniques)}"
         for i, a in enumerate(alerts)
     ])
     
@@ -69,12 +72,12 @@ async def analyst_agent(state: AgentState) -> AgentState:
     analysis_prompt = f"""Analyze these security alerts and create a comprehensive incident report:
 
 ALERTS:
-{alerts_summary}
+{wrap_untrusted(alerts_summary)}
 
 THREAT INTELLIGENCE:
 {threat_intel_summary}
 
-{"CRITIQUE FEEDBACK (revise based on this):" + critique_feedback if critique_feedback else ""}
+{"CRITIQUE FEEDBACK (revise based on this):\n" + sanitize_untrusted(str(critique_feedback), 1500) if critique_feedback else ""}
 
 Perform deep analysis considering:
 1. How do these alerts relate to each other?
@@ -90,7 +93,17 @@ Use tools to search for similar past incidents if helpful."""
         HumanMessage(content=analysis_prompt),
     ]
 
-    response = await llm.ainvoke(messages)
+    try:
+        response = await ainvoke_llm(llm, messages)
+    except Exception as e:  # LLM down / timed out: still save a deterministic report
+        logger.error("analyst_agent: LLM call failed, using fallback report: %s", e)
+        state["incident_report"] = _fallback_report("", alerts, logs)
+        state["agent_execution_log"].append({
+            "agent_name": "analyst", "timestamp": datetime.utcnow().isoformat(),
+            "duration_ms": (datetime.utcnow() - _started_at).total_seconds() * 1000,
+            "output_data": {"llm_error": f"{type(e).__name__}: {e}"},
+        })
+        return state
 
     # If the model chose to call tools instead of answering directly, execute
     # them and give it a follow-up turn so we get actual report text back.
@@ -107,20 +120,16 @@ Use tools to search for similar past incidents if helpful."""
             except Exception as e:
                 result = f"Tool error: {e}"
             messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
-        response = await llm.ainvoke(messages)
+        response = await ainvoke_llm(llm, messages)
 
     content = response.content
 
-    # Parse incident report from response. The LLM occasionally emits JSON that
-    # fails to parse (unescaped newlines inside string values, or a spurious
-    # second {...} block after the real one confusing the greedy regex) -
-    # confirmed live. One retry recovers those transient misses instead of
-    # silently falling back to a much worse placeholder-filled report.
+    # The LLM sometimes emits unparseable JSON; one retry, then a deterministic fallback report.
     try:
         incident_report = _parse_incident_report(content, alerts, logs)
     except _ReportParseError as e:
         logger.warning("analyst_agent: report JSON failed to parse, retrying once: %s", e)
-        retry_response = await llm.ainvoke(messages)
+        retry_response = await ainvoke_llm(llm, messages)
         try:
             incident_report = _parse_incident_report(retry_response.content, alerts, logs)
         except _ReportParseError as e2:
@@ -162,14 +171,8 @@ def _parse_incident_report(content: str, alerts: List, logs: List) -> IncidentRe
     if not isinstance(report_data, dict):
         raise _ReportParseError(f"parsed JSON is not an object: {type(report_data).__name__}")
 
-    # The model can produce syntactically valid JSON that's still garbage - e.g.
-    # dumping the entire object (or a duplicate of it) as the string value of a
-    # single field, so json.loads "succeeds" but every other field silently
-    # falls back to its placeholder default (confirmed live: a 1598-char
-    # "executive_summary" containing the literal substrings of every other key,
-    # while root_cause/impact_assessment ended up as their hardcoded defaults).
-    # A 2-3 sentence executive summary that also contains other schema field
-    # names is a reliable signal of that failure mode, worth a retry.
+    # Valid JSON can still be garbage: the whole object dumped into one field. A long executive
+    # summary containing other schema keys is the signal; treat it as a parse failure (retry).
     exec_summary_raw = report_data.get("executive_summary")
     if isinstance(exec_summary_raw, str) and (
         len(exec_summary_raw) > 800
@@ -230,8 +233,8 @@ def _extract_known_iocs(alerts: List, logs: List) -> Dict[str, List[IOCEntry]]:
     buckets: Dict[str, Dict[str, IOCEntry]] = {b: {} for b in _IOC_TYPE_TO_BUCKET.values()}
 
     def add(bucket: str, value: Optional[str], techniques: List[str], action: str):
-        if not value:
-            return
+        if not value or value.strip().lower() in ("unknown", "none", "-"):
+            return  # parser placeholder, not an observed indicator
         existing = buckets[bucket].get(value)
         if existing:
             for t in techniques:
@@ -267,7 +270,17 @@ def _extract_known_iocs(alerts: List, logs: List) -> Dict[str, List[IOCEntry]]:
     return {bucket: list(entries.values()) for bucket, entries in buckets.items()}
 
 
-def _merge_llm_iocs(buckets: Dict[str, List[IOCEntry]], items: Any) -> None:
+def _observed_text(alerts: List, logs: List) -> str:
+    """Everything the LLM was legitimately allowed to draw an IOC from: the raw log lines and
+    the alert text. An IOC value that appears in none of it was invented."""
+    parts = [getattr(log, "raw_log", "") or "" for log in logs]
+    for a in alerts:
+        parts.append(f"{a.title} {a.description}")
+        parts.extend(str(e) for e in (a.evidence or []))
+    return "\n".join(parts).lower()
+
+
+def _merge_llm_iocs(buckets: Dict[str, List[IOCEntry]], items: Any, observed: str = "") -> None:
     """Merge the LLM's own identified IOCs (which may add judgment that
     pure log extraction can't) into the deterministic
     buckets above, skipping anything malformed or already present rather than
@@ -283,6 +296,9 @@ def _merge_llm_iocs(buckets: Dict[str, List[IOCEntry]], items: Any) -> None:
         if not value or not bucket:
             continue
         if any(existing.value == value for existing in buckets[bucket]):
+            continue
+        if value.lower() not in observed:
+            logger.info("analyst_agent: dropping LLM IOC not present in logs/alerts", value=value)
             continue
         confidence = item.get("confidence")
         if confidence not in _VALID_IOC_CONFIDENCE:
@@ -300,7 +316,7 @@ def _merge_llm_iocs(buckets: Dict[str, List[IOCEntry]], items: Any) -> None:
 
 def _build_ioc_collection(alerts: List, logs: List, llm_items: Any) -> Optional[IOCCollection]:
     buckets = _extract_known_iocs(alerts, logs)
-    _merge_llm_iocs(buckets, llm_items)
+    _merge_llm_iocs(buckets, llm_items, _observed_text(alerts, logs))
     if not any(buckets.values()):
         return None
     return IOCCollection(**buckets)

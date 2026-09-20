@@ -134,7 +134,6 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       }),
-    getStream: (id: string): Promise<any> => fetchAPI(`/incidents/${id}/stream/status`),
   },
 
   // ========== INGESTION ==========
@@ -143,30 +142,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(logs),
     }),
-    upload: (file: File): Promise<any> => {
-      const formData = new FormData();
-      formData.append('file', file);
-      return fetch(`${getApiBaseCandidates()[0]}/ingest/upload`, {
-        method: 'POST',
-        body: formData,
-      }).then(res => {
-        if (!res.ok) {
-          return res.json().then(err => Promise.reject(new Error(err.detail || 'Upload failed')));
-        }
-        return res.json();
-      });
-    },
-  },
-
-  // ========== STREAMING ==========
-  stream: {
-    startAnalysis: (logs: string[], incidentId?: string): Promise<any> => fetchAPI('/v1/incidents/stream', {
-      method: 'POST',
-      body: JSON.stringify({ raw_logs: logs, incident_id: incidentId }),
-    }),
-    getIncidentStream: (incidentId: string): EventSource => {
-      return new EventSource(`${getApiBaseCandidates()[0]}/v1/incidents/${incidentId}/stream`);
-    },
   },
 
   // ========== METRICS ==========
@@ -206,15 +181,11 @@ export const api = {
       fetchAPI('/v1/incidents/search/semantic', { method: 'POST', body: JSON.stringify({ query, limit: limit ?? 10 }) }),
     mitre: (q: string, limit?: number): Promise<any> =>
       fetchAPI(`/v1/mitre/search?q=${encodeURIComponent(q)}&limit=${limit ?? 10}`),
-    generateEmbedding: (incidentId: string): Promise<any> =>
-      fetchAPI(`/v1/incidents/${incidentId}/generate-embedding`, { method: 'POST' }),
   },
 
   // ========== VALIDATION (v1) ==========
   validation: {
     incidentMetrics: (incidentId: string): Promise<any> => fetchAPI(`/v1/validate/incident/${incidentId}/metrics`),
-    validateIncident: (incidentId: string): Promise<any> =>
-      fetchAPI(`/v1/validate/incident/${incidentId}`, { method: 'POST' }),
     aggregate: (): Promise<any> => fetchAPI('/v1/validate/aggregate'),
   },
 

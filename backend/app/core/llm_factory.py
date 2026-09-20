@@ -1,6 +1,7 @@
 """LLM Provider Factory - Supports multiple LLM providers."""
 
-from typing import Optional
+import asyncio
+from typing import Any, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.core.config import settings
@@ -135,3 +136,9 @@ def _get_anthropic_llm(model_name: str, temperature: float) -> BaseChatModel:
             "langchain-anthropic not installed. Install with: pip install langchain-anthropic"
         )
 
+
+
+async def ainvoke_llm(llm: Any, messages: Any) -> Any:
+    """`llm.ainvoke` with a timeout, so a hung model call can't block a worker until its
+    lock expires. Raises asyncio.TimeoutError; each agent decides how to degrade."""
+    return await asyncio.wait_for(llm.ainvoke(messages), timeout=settings.llm_timeout_seconds)

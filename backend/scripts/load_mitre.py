@@ -70,12 +70,8 @@ def get_sample_techniques() -> Dict[str, Any]:
 def extract_techniques(mitre_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract technique objects from MITRE data.
 
-    Real STIX attack-pattern objects have no top-level "x_mitre_id" field - the
-    technique ID lives in external_references, in the entry whose source_name is
-    "mitre-attack" (confirmed against the live raw.githubusercontent.com feed,
-    which has 858 attack-pattern objects and zero "x_mitre_id" keys - this
-    previously silently matched nothing and fell back to the 8-item sample set
-    on every run, which is why Qdrant only ever had 8 techniques).
+    STIX attack-pattern objects carry the technique ID in external_references (the entry whose
+    source_name is "mitre-attack"), not in a top-level field.
     """
     techniques = []
 

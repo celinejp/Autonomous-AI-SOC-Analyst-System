@@ -17,6 +17,10 @@ EMBEDDING_DIM = 768  # nomic-embed-text — must match pgvector + Qdrant VECTOR_
 CACHE_TTL = 3600
 
 
+class EmbeddingError(RuntimeError):
+    """The embedding model could not produce a vector."""
+
+
 async def get_embedding(text: str, use_cache: bool = True) -> List[float]:
     """Generate embedding using Ollama nomic-embed-text with Redis caching."""
     cache_key = f"embedding:{hashlib.md5(text.encode()).hexdigest()}"
@@ -44,8 +48,7 @@ async def get_embedding(text: str, use_cache: bool = True) -> List[float]:
             embedding = data.get("embedding", [])
 
             if not embedding:
-                logger.error("Empty embedding returned from Ollama")
-                return _fallback_embedding(text)
+                raise EmbeddingError("Ollama returned an empty embedding")
 
             if use_cache:
                 try:
@@ -56,25 +59,9 @@ async def get_embedding(text: str, use_cache: bool = True) -> List[float]:
 
             return embedding
 
+    except EmbeddingError:
+        raise
     except Exception as e:
+        # Fail loudly: a fake vector would make every similarity result meaningless.
         logger.error(f"Ollama embedding error: {e}")
-        return _fallback_embedding(text)
-
-
-def _fallback_embedding(text: str) -> List[float]:
-    """Fallback deterministic embedding when Ollama unavailable."""
-    hash_bytes = hashlib.sha256(text.encode()).digest()
-    embedding = []
-    for i in range(EMBEDDING_DIM):
-        byte_idx = i % len(hash_bytes)
-        embedding.append((hash_bytes[byte_idx] - 128) / 128.0)
-    return embedding
-
-
-async def get_batch_embeddings(texts: List[str]) -> List[List[float]]:
-    """Generate embeddings for multiple texts."""
-    embeddings = []
-    for text in texts:
-        emb = await get_embedding(text)
-        embeddings.append(emb)
-    return embeddings
+        raise EmbeddingError(f"Embedding service unavailable: {e}") from e

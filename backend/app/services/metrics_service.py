@@ -16,8 +16,6 @@ class SOCMetrics(BaseModel):
     """SOC KPI metrics model."""
 
     # Time-based metrics
-    mttd_seconds: float = Field(default=0.0, description="Mean Time to Detect")
-
     # Quality metrics
     false_positive_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     true_positive_rate: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -52,7 +50,6 @@ class MetricsService:
         """
         Calculate SOC KPIs for the given time period.
         
-        MTTD: Time from the first alert's timestamp to incident creation
         False positive rate: Incidents marked FALSE_POSITIVE / total incidents
         Alert reduction: Alerts / incidents
         """
@@ -69,11 +66,6 @@ class MetricsService:
 
             incidents_list = list(incidents)
             incidents_count = len(incidents_list)
-
-            # Calculate MTTD (Mean Time to Detect)
-            # Time from first suspicious log to alert generation
-            mttd_total = 0.0
-            mttd_count = 0
 
             # Count false positives
             false_positive_count = 0
@@ -96,24 +88,12 @@ class MetricsService:
                 incident_alerts = list(alerts_result.scalars().all())
                 alerts_count += len(incident_alerts)
 
-                # Calculate time metrics (simplified - would need log timestamps)
-                if incident_alerts:
-                    first_alert = min(incident_alerts, key=lambda a: a.timestamp)
-                    if incident.created_at and first_alert.timestamp:
-                        time_diff = (incident.created_at - first_alert.timestamp).total_seconds()
-                        if time_diff > 0:
-                            mttd_total += time_diff
-                            mttd_count += 1
-
                 # Check if escalated (status is investigating or in_progress for > 1 hour)
                 if incident.status in [IncidentStatus.INVESTIGATING, IncidentStatus.IN_PROGRESS]:
                     if incident.updated_at and incident.created_at:
                         time_diff = (incident.updated_at - incident.created_at).total_seconds()
                         if time_diff > 3600:  # More than 1 hour
                             escalated_count += 1
-
-            # Calculate averages
-            mttd_avg = mttd_total / mttd_count if mttd_count > 0 else 0.0
 
             # Calculate rates
             total_incidents = false_positive_count + true_positive_count
@@ -130,7 +110,6 @@ class MetricsService:
             attack_coverage = await self.get_attack_technique_coverage()
 
             return SOCMetrics(
-                mttd_seconds=mttd_avg,
                 false_positive_rate=false_positive_rate,
                 true_positive_rate=true_positive_rate,
                 alerts_received=alerts_count,
@@ -158,14 +137,3 @@ class MetricsService:
 
         # Return dict of technique_id -> True for all implemented rules
         return {technique_id: True for technique_id in ATTACK_DETECTION_RULES.keys()}
-
-
-def get_metrics_service(db: AsyncSession = None) -> MetricsService:
-    """Dependency injection for metrics service."""
-    # This will be called by FastAPI's dependency injection
-    # If db is None, we need to get it from the dependency
-    if db is None:
-        # This should not happen in normal FastAPI usage
-        raise ValueError("Database session is required")
-    return MetricsService(db)
-

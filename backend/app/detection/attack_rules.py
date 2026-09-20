@@ -1,7 +1,16 @@
 """ATT&CK-native detection rules library."""
 
-from typing import Dict, List, Any
+import ipaddress
+import math
+import re
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional
+
+from app.core.logging import get_logger
 from app.models.log_entry import LogEntry
+
+logger = get_logger(__name__)
 
 
 # ATT&CK Detection Rules Library
@@ -12,18 +21,13 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "tactic": "Initial Access",
         "required_telemetry": ["email_gateway", "edr"],
         "patterns": [
-            {"type": "email_attachment", "suspicious_types": [".exe", ".bat", ".scr", ".vbs", ".js"]},
+            {"type": "email_attachment", "suspicious_types": [".exe", ".bat", ".scr", ".vbs", ".js", ".docm", ".xlsm", ".pptm", ".iso", ".lnk"]},
+            # A verdict the mail gateway / sandbox already wrote into the log line
+            # (e.g. attachment_verdict=malicious_macro). No external lookup is done here.
             {"type": "email_attachment_hash", "reputation": "malicious"},
-        ],
-        "severity_base": "high",
-    },
-    "T1566.002": {
-        "name": "Phishing: Spearphishing Link",
-        "tactic": "Initial Access",
-        "required_telemetry": ["email_gateway", "proxy"],
-        "patterns": [
-            {"type": "url_reputation", "reputation": "phishing"},
-            {"type": "domain_age", "days_threshold": 30},
+            # Endpoint evidence that an opened attachment executed: an Office app spawning a shell/script host.
+            {"type": "parent_child", "parent_pattern": r"(?i)(winword|excel|powerpnt|outlook|msaccess)\.exe",
+             "child_pattern": r"(?i)(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32|msdt)\.exe"},
         ],
         "severity_base": "high",
     },
@@ -93,7 +97,8 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "tactic": "Persistence",
         "required_telemetry": ["windows_sysmon", "edr"],
         "patterns": [
-            {"type": "regex", "field": "registry_key", "pattern": r"(?i)(HKLM|HKCU)\\.*\\(Run|RunOnce)"},
+            {"type": "registry", "pattern": r"(?i)\\CurrentVersion\\(Run|RunOnce|RunServices)(Ex)?\\|\\Winlogon\\(Userinit|Shell)\b",
+             "details_pattern": r"(?i)\\Temp\\|\\ProgramData\\|\\Users\\Public\\|powershell|cmd(\.exe)?\s|wscript|cscript|mshta|rundll32|regsvr32|https?://|\.(bat|vbs|js|ps1|hta)\b"},
         ],
         "severity_base": "high",
     },
@@ -113,7 +118,7 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["windows_security"],
         "patterns": [
             {"type": "event_id", "value": 4720},  # User account created
-            {"type": "regex", "field": "command_line", "pattern": r"(?i)net\s+user\s+\w+\s+.*\/add"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)net1?\s+(user|localgroup)\s+.*/add"},
         ],
         "severity_base": "high",
     },
@@ -124,7 +129,7 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["windows_sysmon", "edr"],
         "patterns": [
             {"type": "regex", "field": "command_line", "pattern": r"(?i)(fodhelper|eventvwr|sdclt)\.exe"},
-            {"type": "registry", "pattern": r"ms-settings\\shell\\open\\command"},
+            {"type": "registry", "pattern": r"(?i)[\\_]Classes\\(ms-settings|mscfile|exefile|Folder)\\shell\\open\\command"},
         ],
         "severity_base": "critical",
     },
@@ -134,7 +139,7 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["windows_sysmon", "edr"],
         "patterns": [
             {"type": "process_access", "target": "lsass.exe", "access_mask": ["0x1010", "0x1410"]},
-            {"type": "regex", "field": "command_line", "pattern": r"(?i)(mimikatz|procdump.*lsass|sekurlsa)"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)(mimikatz|sekurlsa|(procdump|createdump|dump)\S*\s.*lsass|lsass\S*\.dmp|comsvcs(\.dll)?[,\s]+#?(minidump|24)|rundll32.*comsvcs)"},
         ],
         "severity_base": "critical",
     },
@@ -145,6 +150,7 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["windows_security"],
         "patterns": [
             {"type": "event_id", "value": 1102},  # Audit log cleared
+            {"type": "event_id", "value": 104, "provider": "eventlog"},  # System/Application log cleared
             {"type": "regex", "field": "command_line", "pattern": r"(?i)wevtutil\s+(cl|clear-log)"},
         ],
         "severity_base": "critical",
@@ -154,7 +160,7 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "tactic": "Defense Evasion",
         "required_telemetry": ["windows_sysmon", "edr"],
         "patterns": [
-            {"type": "regex", "field": "command_line", "pattern": r"(?i)(Set-MpPreference|DisableRealtimeMonitoring|sc\s+stop\s+windefend)"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)((Set|Add)-MpPreference|DisableRealtimeMonitoring|sc(\.exe)?\s+(stop|config)\s+windefend|netsh\s+advfirewall\s+set\s+\S+\s+state\s+off)"},
             {"type": "service_stop", "services": ["WinDefend", "MsMpSvc", "Sense"]},
         ],
         "severity_base": "critical",
@@ -165,19 +171,9 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "tactic": "Discovery",
         "required_telemetry": ["windows_sysmon", "edr"],
         "patterns": [
-            {"type": "regex", "field": "command_line", "pattern": r"(?i)(net\s+user|net\s+localgroup|wmic\s+useraccount)"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)(net1?\s+(user|localgroup|group)|wmic\s+useraccount)", "min_count": 3, "window_seconds": 600},
         ],
         "severity_base": "low",
-    },
-    "T1046": {
-        "name": "Network Service Discovery",
-        "tactic": "Discovery",
-        "required_telemetry": ["firewall", "netflow"],
-        "patterns": [
-            {"type": "port_scan", "unique_ports_threshold": 20, "window_seconds": 60},
-            {"type": "regex", "field": "command_line", "pattern": r"(?i)(nmap|masscan|portscan)"},
-        ],
-        "severity_base": "medium",
     },
     # Lateral Movement (TA0008)
     "T1021.001": {
@@ -186,6 +182,7 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["windows_security", "firewall"],
         "patterns": [
             {"type": "event_id", "value": 4624, "logon_type": 10},  # RDP logon
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)mstsc(\.exe)?\"?\s+.*?/v:"},  # RDP client launched
             {"type": "multiple_hosts", "protocol": "rdp", "threshold": 3, "window_seconds": 3600},
         ],
         "severity_base": "medium",
@@ -196,6 +193,7 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["windows_security", "firewall"],
         "patterns": [
             {"type": "regex", "field": "file_path", "pattern": r"\\\\.*\\(ADMIN\$|C\$|IPC\$)"},
+            {"type": "regex", "field": "command_line", "pattern": r"\\\\[^\s\\]+\\(ADMIN\$|C\$|IPC\$)"},
             {"type": "process", "name": "psexec", "multiple_hosts": True},
         ],
         "severity_base": "high",
@@ -207,7 +205,6 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["windows_sysmon", "edr"],
         "patterns": [
             {"type": "regex", "field": "command_line", "pattern": r"(?i)(7z|rar|zip).*(-p|password)"},
-            {"type": "file_create", "extension": [".7z", ".rar", ".zip"], "size_threshold_mb": 100},
         ],
         "severity_base": "medium",
     },
@@ -218,201 +215,404 @@ ATTACK_DETECTION_RULES: Dict[str, Dict[str, Any]] = {
         "required_telemetry": ["proxy", "firewall", "dns"],
         "patterns": [
             {"type": "data_volume", "bytes_out_threshold": 104857600, "window_seconds": 3600},  # 100MB
-            {"type": "dns_exfil", "query_length_threshold": 50, "subdomain_entropy_threshold": 3.5},
+            {"type": "dns_exfil", "query_length_threshold": 50, "subdomain_entropy_threshold": 3.5, "min_queries": 3},
+            # nslookup carrying encoded data; WebDAV upload via davclnt.dll
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)nslookup(\.exe)?\s+(-\S+\s+)*[A-Za-z0-9+/=_-]{16,}\b"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)davclnt\.dll,\s*DavSetCookie"},
         ],
         "severity_base": "critical",
-    },
-    "T1567.002": {
-        "name": "Exfiltration Over Web Service: Exfiltration to Cloud Storage",
-        "tactic": "Exfiltration",
-        "required_telemetry": ["proxy"],
-        "patterns": [
-            {
-                "type": "upload",
-                "domains": ["dropbox.com", "drive.google.com", "onedrive.live.com", "mega.nz"],
-                "bytes_threshold": 52428800,
-            }
-        ],
-        "severity_base": "high",
     },
     # Command and Control (TA0011)
-    "T1071.001": {
-        "name": "Application Layer Protocol: Web Protocols",
-        "tactic": "Command and Control",
-        "required_telemetry": ["proxy", "firewall"],
-        "patterns": [
-            {"type": "beaconing", "interval_regularity_threshold": 0.9, "min_connections": 10},
-            {"type": "domain_age", "days_threshold": 30},
-        ],
-        "severity_base": "high",
-    },
-    "T1071.004": {
-        "name": "Application Layer Protocol: DNS",
-        "tactic": "Command and Control",
-        "required_telemetry": ["dns"],
-        "patterns": [
-            {"type": "dns_tunneling", "txt_record_threshold": 10, "query_frequency_threshold": 100},
-        ],
-        "severity_base": "critical",
-    },
     # Impact (TA0040)
-    "T1486": {
-        "name": "Data Encrypted for Impact",
-        "tactic": "Impact",
-        "required_telemetry": ["edr", "windows_sysmon"],
-        "patterns": [
-            {"type": "file_modify", "extensions_changed_threshold": 50, "window_seconds": 60},
-            {"type": "file_create", "pattern": r"(?i)(readme|decrypt|ransom|locked).*\.txt"},
-        ],
-        "severity_base": "critical",
-    },
     "T1490": {
         "name": "Inhibit System Recovery",
         "tactic": "Impact",
         "required_telemetry": ["windows_sysmon", "edr"],
         "patterns": [
-            {"type": "regex", "field": "command_line", "pattern": r"(?i)(vssadmin\s+delete|bcdedit.*recoveryenabled.*no|wbadmin\s+delete)"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)(vssadmin(\.exe)?\s+delete|wmic.*shadowcopy.*delete|Win32_ShadowCopy.*Delete|bcdedit.*recoveryenabled.*no|wbadmin\s+delete)"},
         ],
         "severity_base": "critical",
+    },
+    # Techniques below were added after testing on public attack data (Splunk attack_data).
+    "T1218.011": {
+        "name": "System Binary Proxy Execution: Rundll32",
+        "tactic": "Defense Evasion",
+        "required_telemetry": ["windows_sysmon", "windows_security"],
+        "patterns": [
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)rundll32(\.exe)?\"?\s+(javascript:|vbscript:|\\\\)"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)rundll32(\.exe)?\"?\s+\S*\\(temp|appdata|programdata|users\\public)\\"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)rundll32(\.exe)?\"?\s+[^\s,]+\.(?!dll\b)[a-z0-9]{1,5}\s*,"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)rundll32(\.exe)?\"?\s+\S+,\s*#\d+"},  # export called by ordinal
+        ],
+        "severity_base": "medium",
+    },
+    "T1218.005": {
+        "name": "System Binary Proxy Execution: Mshta",
+        "tactic": "Defense Evasion",
+        "required_telemetry": ["windows_sysmon", "windows_security"],
+        "patterns": [
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)mshta(\.exe)?\"?\s+(.*(https?://|javascript:|vbscript:)|\S+\.hta)"},
+        ],
+        "severity_base": "high",
+    },
+    "T1105": {
+        "name": "Ingress Tool Transfer",
+        "tactic": "Command and Control",
+        "required_telemetry": ["windows_sysmon", "windows_security"],
+        "patterns": [
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)certutil(\.exe)?\"?\s+.*-(urlcache|verifyctl)"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)bitsadmin(\.exe)?\"?\s+.*/transfer|Start-BitsTransfer"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)\b(curl|wget)(\.exe)?\"?\s+(?=.*https?://)(?=.*(-o\s|-O\b|--output|>\s*\S))"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)(Invoke-WebRequest|\biwr\b)(?=.*-OutFile)"},
+        ],
+        "severity_base": "medium",
+    },
+    "T1543.003": {
+        "name": "Create or Modify System Process: Windows Service",
+        "tactic": "Persistence",
+        "required_telemetry": ["windows_system", "windows_security"],
+        "patterns": [
+            # A new service whose binary is in a user-writable path, runs a shell, or is a remote share (events 7045 / 4697)
+            {"type": "regex", "field": "command_line", "event_ids": [7045, 4697], "pattern": r"(?i)(\\(temp|appdata|programdata|users\\public)\\|%comspec%|\bcmd(\.exe)?\s+/c|powershell|\\\\[^\s\\]+\\|\\admin\$|psexesvc|remcom)"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)\bsc(\.exe)?\s+create\b|New-Service\b"},
+        ],
+        "severity_base": "high",
+    },
+    "T1003.002": {
+        "name": "OS Credential Dumping: Security Account Manager",
+        "tactic": "Credential Access",
+        "required_telemetry": ["windows_sysmon", "windows_security"],
+        "patterns": [
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)reg(\.exe)?\"?\s+save\s+\S*\b(sam|system|security)\b"},
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)(esentutl|ntdsutil|vssadmin)\S*\s.*\b(sam|ntds)\b|\\config\\sam\b"},
+        ],
+        "severity_base": "critical",
+    },
+    "T1047": {
+        "name": "Windows Management Instrumentation",
+        "tactic": "Execution",
+        "required_telemetry": ["windows_sysmon", "windows_security"],
+        "patterns": [
+            {"type": "regex", "field": "command_line", "pattern": r"(?i)wmic(\.exe)?\"?\s+.*(process\s+call\s+create|/node:)|Invoke-(Cim|Wmi)Method|Win32_Process.*Create"},
+        ],
+        "severity_base": "medium",
     },
 }
 
 
-def evaluate_attack_rules(logs: List[LogEntry], rules: Dict[str, Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """
-    Evaluate ATT&CK-mapped detection rules against log entries.
-    
-    Returns list of alerts in format:
-    {
-        "technique_id": "T1110.001",
-        "name": "...",
-        "tactic": "...",
-        "severity": "high",
-        "matched_logs": [...],
-        "confidence": 0.85
-    }
-    """
-    if rules is None:
-        rules = ATTACK_DETECTION_RULES
+# --------------------------------------------------------------------------------------
+# Rule evaluation
+#
+# Every pattern "type" used in ATTACK_DETECTION_RULES needs an evaluator here (tests/test_attack_rules.py
+# checks this). `required_telemetry` is documentation only: evaluators read concrete LogEntry fields and
+# find nothing when a field is absent.
+# --------------------------------------------------------------------------------------
 
-    alerts = []
-    # LogEntry.id is never populated during ingest (nothing assigns it) - reference
-    # matched logs by their position in `logs` instead, consistent with every other
-    # alert path in detection_agent.py (related_log_indices / range(len(logs))).
-    log_positions = {id(log): i for i, log in enumerate(logs)}
+_EPOCH = datetime(1970, 1, 1)
 
-    # Group logs by required telemetry type
-    logs_by_source = {}
-    for log in logs:
-        source_type = log.log_source_type.value if log.log_source_type else "custom"
-        if source_type not in logs_by_source:
-            logs_by_source[source_type] = []
-        logs_by_source[source_type].append(log)
 
-    # Evaluate each rule
-    for technique_id, rule in rules.items():
-        # Check if required telemetry is available
-        required_telemetry = rule.get("required_telemetry", [])
-        available_sources = set(logs_by_source.keys())
-        has_required_telemetry = any(
-            req in available_sources or req.replace("_", " ") in available_sources
-            for req in required_telemetry
-        )
+def _ts(log: LogEntry):
+    return log.timestamp or _EPOCH
 
-        if not has_required_telemetry:
-            continue
 
-        # Evaluate patterns
-        matched_logs = []
-        for pattern in rule.get("patterns", []):
-            pattern_type = pattern.get("type")
+def _meta(log: LogEntry, key: str, default: Any = None) -> Any:
+    return (log.metadata or {}).get(key, default)
 
-            if pattern_type == "threshold":
-                matched_logs.extend(_evaluate_threshold_pattern(logs, pattern))
-            elif pattern_type == "regex":
-                matched_logs.extend(_evaluate_regex_pattern(logs, pattern))
-            elif pattern_type == "event_id":
-                matched_logs.extend(_evaluate_event_id_pattern(logs, pattern))
-            # Add more pattern types as needed
 
-        if matched_logs:
-            alerts.append(
-                {
-                    "technique_id": technique_id,
-                    "name": rule.get("name"),
-                    "tactic": rule.get("tactic"),
-                    "severity": rule.get("severity_base", "medium"),
-                    "matched_logs": [str(log_positions[id(log)]) for log in matched_logs],
-                    "confidence": min(0.9, 0.5 + (len(matched_logs) * 0.1)),
-                }
-            )
+def _dest_host(log: LogEntry) -> Optional[str]:
+    return log.destination_ip or _meta(log, "dhost") or _meta(log, "dest_host") or _meta(log, "host")
 
-    return alerts
+
+def _entropy(text: str) -> float:
+    if not text:
+        return 0.0
+    counts = Counter(text)
+    total = len(text)
+    return -sum((c / total) * math.log2(c / total) for c in counts.values())
+
+
+def _windows(ordered: List[LogEntry], window: timedelta):
+    """Yield each sliding time window (as a list) over logs already sorted by time."""
+    start = 0
+    for end in range(len(ordered)):
+        while _ts(ordered[end]) - _ts(ordered[start]) > window:
+            start += 1
+        yield ordered[start:end + 1]
 
 
 def _evaluate_threshold_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
-    """Evaluate threshold-based pattern (e.g., 5 failed logins in 60 seconds)."""
-    matched = []
+    """N matching events inside a time window, grouped by fields (e.g. 5 failed logins
+    from one IP+user in 60 s). Optional distinct_field/distinct_min turns it into
+    password-spraying logic (many different users from one source)."""
+    matched: List[LogEntry] = []
     field = pattern.get("field")
     value = pattern.get("value")
     count = pattern.get("count", 5)
-    window_seconds = pattern.get("window_seconds", 60)
+    window = timedelta(seconds=pattern.get("window_seconds", 60))
+    distinct_field = pattern.get("distinct_field")
+    distinct_min = pattern.get("distinct_min", 0)
 
-    # Group by group_by fields
-    from collections import defaultdict
-    from datetime import timedelta
-    groups = defaultdict(list)
-
+    groups: Dict[tuple, List[LogEntry]] = defaultdict(list)
     for log in logs:
-        if hasattr(log, field) and getattr(log, field) == value:
+        if getattr(log, field, None) == value:
             key = tuple(getattr(log, gb, None) for gb in pattern.get("group_by", []))
             groups[key].append(log)
 
-    # Check if any group has `count` events within a `window_seconds` span -
-    # not just `count` events anywhere in the whole log set, however far apart.
-    window = timedelta(seconds=window_seconds)
     for group_logs in groups.values():
-        ordered = sorted(group_logs, key=lambda l: l.timestamp)
-        start = 0
-        for end in range(len(ordered)):
-            while ordered[end].timestamp - ordered[start].timestamp > window:
-                start += 1
-            if end - start + 1 >= count:
-                matched.extend(ordered)
-                break
-
+        ordered = sorted(group_logs, key=_ts)
+        for win in _windows(ordered, window):
+            if len(win) < count:
+                continue
+            if distinct_field:
+                distinct = {getattr(l, distinct_field, None) for l in win} - {None}
+                if len(distinct) < distinct_min:
+                    continue
+            matched.extend(ordered)
+            break
     return matched
 
 
 def _evaluate_regex_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
-    """Evaluate regex pattern against log field."""
-    import re
-
-    matched = []
+    compiled = re.compile(pattern["pattern"]) if pattern.get("pattern") else None
     field = pattern.get("field")
-    regex_pattern = pattern.get("pattern")
-
-    if not regex_pattern:
-        return matched
-
-    compiled = re.compile(regex_pattern)
-
-    for log in logs:
-        field_value = getattr(log, field, None) if hasattr(log, field) else None
-        if field_value and compiled.search(str(field_value)):
-            matched.append(log)
-
-    return matched
+    if not compiled:
+        return []
+    event_ids = pattern.get("event_ids")  # optionally restrict the pattern to specific Windows event IDs
+    out = [log for log in logs
+           if (not event_ids or log.event_id in event_ids)
+           and getattr(log, field, None) and compiled.search(str(getattr(log, field)))]
+    min_count = pattern.get("min_count", 1)
+    if min_count > 1:  # e.g. one `net user` is routine admin work; several discovery commands together are not
+        window = timedelta(seconds=pattern.get("window_seconds", 600))
+        for win in _windows(sorted(out, key=_ts), window):
+            if len(win) >= min_count:
+                return out
+        return []
+    return out
 
 
 def _evaluate_event_id_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
-    """Evaluate event ID pattern (Windows Event Log)."""
-    matched = []
     event_id = pattern.get("value")
-
+    logon_type = pattern.get("logon_type")
+    out = []
     for log in logs:
-        if hasattr(log, "event_id") and log.event_id == event_id:
-            matched.append(log)
+        if log.event_id != event_id:
+            continue
+        if logon_type is not None and _meta(log, "logon_type") != logon_type:
+            continue
+        provider = pattern.get("provider")
+        if provider and provider not in str(_meta(log, "provider", "")).lower():
+            continue
+        out.append(log)
+    return out
 
+
+def _evaluate_parent_child_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    parent_re = re.compile(pattern["parent_pattern"])
+    child_re = re.compile(pattern["child_pattern"])
+    return [
+        l for l in logs
+        if l.parent_process_name and parent_re.search(l.parent_process_name)
+        and (child_re.search(l.process_name or "") or child_re.search(l.command_line or ""))
+    ]
+
+
+def _evaluate_process_access_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    """Sysmon event 10 style: some process opens `target` with a suspicious access mask."""
+    target = pattern["target"].lower()
+    masks = {m.lower() for m in pattern.get("access_mask", [])}
+    out = []
+    for log in logs:
+        raw = (log.raw_log or "").lower()
+        tgt = str(_meta(log, "TargetImage") or "").lower()
+        if not (target in tgt or re.search(r"targetimage\W+\S*" + re.escape(target), raw)):
+            continue
+        granted = str(_meta(log, "GrantedAccess") or "").lower()
+        if not granted:
+            m = re.search(r"grantedaccess\W+(0x[0-9a-f]+)", raw)
+            granted = m.group(1) if m else ""
+        if not masks or granted in masks:
+            out.append(log)
+    return out
+
+
+def _evaluate_registry_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    """Registry key matches; if the pattern has `details_pattern` and the event carries the written
+    value, the value must match too (an updater's Run key pointing into Program Files is routine)."""
+    compiled = re.compile(pattern["pattern"])
+    details_re = re.compile(pattern["details_pattern"]) if pattern.get("details_pattern") else None
+    out = []
+    for log in logs:
+        if not (compiled.search(log.registry_key or "") or compiled.search(log.raw_log or "")):
+            continue
+        details = _meta(log, "Details")
+        if details_re and details and not details_re.search(str(details)):
+            continue
+        out.append(log)
+    return out
+
+
+def _evaluate_service_stop_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    names = "|".join(re.escape(s) for s in pattern.get("services", []))
+    compiled = re.compile(rf"(?i)(sc(\.exe)?\s+(stop|config)|net\s+stop|Stop-Service)\s+[\"']?({names})")
+    return [l for l in logs if compiled.search(l.command_line or "") or compiled.search(l.raw_log or "")]
+
+
+def _is_rdp(log: LogEntry) -> bool:
+    return (
+        log.destination_port == 3389
+        or _meta(log, "logon_type") == 10
+        or bool(re.search(r"(?i)\brdp\b|remote\s?desktop|RemoteInteractive|mstsc", log.raw_log or ""))
+    )
+
+
+def _evaluate_multiple_hosts_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    """One source reaching several different hosts over a protocol inside a window."""
+    if pattern.get("protocol") != "rdp":
+        return []
+    threshold = pattern.get("threshold", 3)
+    window = timedelta(seconds=pattern.get("window_seconds", 3600))
+    by_src: Dict[str, List[LogEntry]] = defaultdict(list)
+    for log in logs:
+        if _is_rdp(log) and _dest_host(log):
+            by_src[log.source_ip].append(log)
+    matched: List[LogEntry] = []
+    for ls in by_src.values():
+        ordered = sorted(ls, key=_ts)
+        for win in _windows(ordered, window):
+            if len({_dest_host(l) for l in win}) >= threshold:
+                matched.extend(ordered)
+                break
     return matched
 
+
+def _evaluate_process_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    """A named tool (e.g. psexec) used against more than one host."""
+    name = pattern["name"].lower()
+    hits = [
+        l for l in logs
+        if name in (l.process_name or "").lower() or name in (l.command_line or "").lower()
+        or name in (l.raw_log or "").lower()
+    ]
+    if pattern.get("multiple_hosts") and len({_dest_host(l) for l in hits} - {None}) < 2:
+        return []
+    return hits
+
+
+def _is_internal(ip: Optional[str]) -> bool:
+    try:
+        return bool(ip) and ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def _evaluate_data_volume_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    """Large outbound volume from one source. Transfers to a private/internal destination
+    (backups, file servers) are not exfiltration and are skipped when the destination is known."""
+    threshold = pattern.get("bytes_out_threshold", 104857600)
+    by_src: Dict[str, List[LogEntry]] = defaultdict(list)
+    for log in logs:
+        if log.bytes_out and not _is_internal(log.destination_ip):
+            by_src[log.source_ip].append(log)
+    matched: List[LogEntry] = []
+    for ls in by_src.values():
+        if sum(l.bytes_out for l in ls) >= threshold:
+            matched.extend(ls)
+    return matched
+
+
+def _long_random_queries(logs: List[LogEntry], length: int, entropy: float, min_queries: int) -> List[LogEntry]:
+    """DNS queries whose left-most label is long and random-looking, repeated against one
+    parent domain - the shape of DNS tunnelling / exfiltration."""
+    by_domain: Dict[str, List[LogEntry]] = defaultdict(list)
+    for log in logs:
+        q = (log.dns_query or "").rstrip(".")
+        parts = q.split(".")
+        if len(parts) < 2:
+            continue
+        label = parts[0]
+        if len(label) >= length and _entropy(label) >= entropy:
+            by_domain[".".join(parts[-2:])].append(log)
+    matched: List[LogEntry] = []
+    for ls in by_domain.values():
+        if len(ls) >= min_queries:
+            matched.extend(ls)
+    return matched
+
+
+def _evaluate_dns_exfil_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    # query_length_threshold is the whole query length; use it as a per-label floor / 2.
+    return _long_random_queries(
+        logs, max(20, pattern.get("query_length_threshold", 50) // 2),
+        pattern.get("subdomain_entropy_threshold", 3.5), pattern.get("min_queries", 3),
+    )
+
+
+def _evaluate_email_attachment_pattern(logs: List[LogEntry], pattern: Dict[str, Any]) -> List[LogEntry]:
+    suspicious = tuple(pattern.get("suspicious_types", []))
+    return [
+        l for l in logs
+        if any(name.lower().endswith(suspicious) for name in (l.attachment_names or []))
+    ]
+
+
+def _evaluate_verdict_pattern(logs: List[LogEntry], pattern: Dict[str, Any], keys: str) -> List[LogEntry]:
+    """Match a verdict/reputation value that the log source itself reported."""
+    word = pattern.get("reputation", "malicious")
+    compiled = re.compile(rf"(?i)\b(?:{keys})\w*[=:]\s*\"?[\w-]*{re.escape(word)}")
+    return [l for l in logs if compiled.search(l.raw_log or "")]
+
+
+_EVALUATORS: Dict[str, Callable[[List[LogEntry], Dict[str, Any]], List[LogEntry]]] = {
+    "threshold": _evaluate_threshold_pattern,
+    "regex": _evaluate_regex_pattern,
+    "event_id": _evaluate_event_id_pattern,
+    "parent_child": _evaluate_parent_child_pattern,
+    "process_access": _evaluate_process_access_pattern,
+    "registry": _evaluate_registry_pattern,
+    "service_stop": _evaluate_service_stop_pattern,
+    "multiple_hosts": _evaluate_multiple_hosts_pattern,
+    "process": _evaluate_process_pattern,
+    "data_volume": _evaluate_data_volume_pattern,
+    "dns_exfil": _evaluate_dns_exfil_pattern,
+    "email_attachment": _evaluate_email_attachment_pattern,
+    "email_attachment_hash": lambda logs, p: _evaluate_verdict_pattern(logs, p, "attachment_verdict|verdict|av_result"),
+}
+
+SUPPORTED_PATTERN_TYPES = frozenset(_EVALUATORS)
+
+
+def evaluate_attack_rules(logs: List[LogEntry], rules: Dict[str, Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Evaluate the ATT&CK-mapped rules against parsed log entries.
+
+    Returns one dict per technique that matched:
+    {"technique_id", "name", "tactic", "severity", "matched_logs" (positions in `logs`),
+     "confidence"}
+    """
+    if rules is None:
+        rules = ATTACK_DETECTION_RULES
+
+    # LogEntry.id is never populated during ingest - reference matched logs by their
+    # position in `logs`, like every other alert path in detection_agent.py.
+    positions = {id(log): i for i, log in enumerate(logs)}
+    alerts: List[Dict[str, Any]] = []
+
+    for technique_id, rule in rules.items():
+        matched: Dict[int, LogEntry] = {}
+        for pattern in rule.get("patterns", []):
+            evaluator = _EVALUATORS.get(pattern.get("type"))
+            if evaluator is None:
+                logger.warning("attack_rules: unsupported pattern type %r in %s", pattern.get("type"), technique_id)
+                continue
+            for log in evaluator(logs, pattern):
+                matched[positions[id(log)]] = log
+        if matched:
+            alerts.append({
+                "technique_id": technique_id,
+                "name": rule.get("name"),
+                "tactic": rule.get("tactic"),
+                "severity": rule.get("severity_base", "medium"),
+                "matched_logs": [str(i) for i in sorted(matched)],
+                "confidence": min(0.9, 0.5 + (len(matched) * 0.1)),
+            })
+    return alerts

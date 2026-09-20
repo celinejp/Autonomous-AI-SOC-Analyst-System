@@ -65,6 +65,9 @@ services:
       - ENVIRONMENT=development
       - LOG_LEVEL=INFO
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-120}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-5242880}
+      - MAX_LOG_LINES=${MAX_LOG_LINES:-5000}
+      - MAX_LOG_LINE_CHARS=${MAX_LOG_LINE_CHARS:-8192}
     depends_on:
       postgres:
         condition: service_healthy

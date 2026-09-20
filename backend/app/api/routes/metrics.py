@@ -64,31 +64,3 @@ async def get_attack_coverage(
     except Exception as e:
         logger.error(f"Failed to get attack coverage: {e}")
         raise
-
-
-@router.get("/range")
-async def get_metrics_range(
-    start_time: datetime = Query(..., description="Start time (ISO format)"),
-    end_time: datetime = Query(..., description="End time (ISO format)"),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get SOC KPI metrics for a custom time range."""
-    try:
-        if end_time < start_time:
-            raise ValueError("End time must be after start time")
-        
-        metrics_service = MetricsService(db)
-        metrics = await metrics_service.calculate_soc_metrics(start_time, end_time)
-        
-        return {
-            "status": "success",
-            "metrics": metrics.model_dump(),
-            "period": {
-                "start": start_time.isoformat(),
-                "end": end_time.isoformat(),
-            },
-        }
-    except Exception as e:
-        logger.error(f"Failed to get metrics range: {e}")
-        raise
-

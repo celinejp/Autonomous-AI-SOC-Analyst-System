@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.api.routes import (
-    incidents, ingest, analysis, health, semantic_search,
+    incidents, ingest, health, semantic_search,
     stream, validation, dashboard, performance, debug, synthetic_data, metrics
 )
 
@@ -57,7 +57,6 @@ async def error_handler(request: Request, call_next: Callable):
 app.include_router(health.router, prefix="/api/health", tags=["health"])
 app.include_router(incidents.router, prefix="/api/incidents", tags=["incidents"])
 app.include_router(ingest.router, prefix="/api/ingest", tags=["ingest"])
-app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(semantic_search.router, tags=["semantic-search"])
 app.include_router(stream.router, tags=["streaming"])
 app.include_router(validation.router, tags=["validation"])
@@ -81,7 +80,6 @@ async def startup_event():
         await connect_with_retry()
         await ensure_consumer_group(ANALYSIS_STREAM)
         await ensure_consumer_group(EMBED_STREAM)
-        await ensure_collection("incidents", vector_size=VECTOR_SIZE)
         await ensure_collection("mitre_techniques", vector_size=VECTOR_SIZE)
         logger.info("Redis Streams + Qdrant collections ready")
     except Exception as e:
@@ -111,6 +109,17 @@ async def shutdown_event():
     except Exception:
         pass
     logger.info("SOC Analyst System shutting down")
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request: Request, call_next: Callable):
+    """Reject oversized request bodies up front (declared Content-Length) so a huge upload is
+    never read into memory. Per-line and per-file checks in app/core/security.py cover the rest."""
+    declared = request.headers.get("content-length")
+    limit = settings.max_upload_bytes * 2  # JSON escaping / multipart overhead headroom
+    if declared and declared.isdigit() and int(declared) > limit:
+        return JSONResponse(status_code=413, content={"detail": f"Request body too large (max {limit} bytes)"})
+    return await call_next(request)
 
 
 # Redis fixed-window rate limiting

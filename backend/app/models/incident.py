@@ -64,23 +64,6 @@ class ResponseAction(BaseModel):
     
     # Role assignment
     assigned_team: str  # SOC, Network, Endpoint, IAM, Legal, PR, Management
-    requires_approval: bool = False
-    approval_level: Optional[str] = None  # team_lead, manager, ciso
-    
-    # Execution details
-    automated: bool = False
-    automation_available: bool = False
-    manual_steps: Optional[List[str]] = Field(default_factory=list)
-    
-    # Timing
-    sla_hours: Optional[int] = None
-    
-    # Dependencies
-    depends_on: List[str] = Field(default_factory=list)  # IDs of other actions
-    
-    # Verification
-    success_criteria: str = ""
-    verification_steps: List[str] = Field(default_factory=list)
 
 
 
@@ -111,12 +94,6 @@ class ResponsePlan(BaseModel):
     incident_id: str = ""
     generated_at: Optional[datetime] = None
     
-    # Categorized actions by timing
-    immediate_actions: List[ResponseAction] = Field(default_factory=list)  # < 1 hour
-    short_term_actions: List[ResponseAction] = Field(default_factory=list)  # 1-24 hours
-    long_term_actions: List[ResponseAction] = Field(default_factory=list)  # > 24 hours
-    
-    # Legacy compatibility
     containment_actions: List[ResponseAction] = Field(default_factory=list)
     investigation_steps: List[ResponseAction] = Field(default_factory=list)
     remediation_actions: List[ResponseAction] = Field(default_factory=list)

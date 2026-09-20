@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useSOCMetrics } from '@/hooks/useSOCMetrics';
-import { Clock, AlertCircle, Target } from 'lucide-react';
+import { AlertCircle, Target } from 'lucide-react';
 
 interface SOCMetricsDashboardProps {
   hours?: number;
@@ -11,16 +11,10 @@ interface SOCMetricsDashboardProps {
 export function SOCMetricsDashboard({ hours = 24 }: SOCMetricsDashboardProps) {
   const { data: metrics, isLoading } = useSOCMetrics(hours);
 
-  const formatDuration = (seconds: number) => {
-    if (seconds < 60) return `${Math.round(seconds)}s`;
-    if (seconds < 3600) return `${Math.round(seconds / 60)}min`;
-    return `${Math.round(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}min`;
-  };
-
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {[...Array(3)].map((_, i) => (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {[...Array(2)].map((_, i) => (
           <Card key={i} className="bg-gray-900 border-gray-800">
             <CardContent className="p-6">
               <div className="h-20 bg-gray-800 rounded animate-pulse"></div>
@@ -31,23 +25,11 @@ export function SOCMetricsDashboard({ hours = 24 }: SOCMetricsDashboardProps) {
     );
   }
 
-  const mttd = metrics?.mttd_seconds ? formatDuration(metrics.mttd_seconds) : 'N/A';
   const fpRate = metrics?.false_positive_rate ? (metrics.false_positive_rate * 100).toFixed(1) : '0';
   const alertReduction = metrics?.alert_reduction_ratio ? metrics.alert_reduction_ratio.toFixed(1) : '0';
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <Card className="bg-gray-900 border-gray-800">
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium text-gray-400">MTTD</CardTitle>
-          <Clock className="h-4 w-4 text-blue-400" />
-        </CardHeader>
-        <CardContent>
-          <div className="text-2xl font-bold text-blue-400">{mttd}</div>
-          <p className="text-xs text-gray-500 mt-1">Mean Time To Detect</p>
-        </CardContent>
-      </Card>
-
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <Card className="bg-gray-900 border-gray-800">
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-400">False Positive</CardTitle>

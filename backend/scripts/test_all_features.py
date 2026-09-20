@@ -151,7 +151,7 @@ class SystemTester:
                     TextColumn(f"  Testing {attack_type}..."),
                     console=console,
                 ) as progress:
-                    task = progress.add_task("", total=None)
+                    _ = progress.add_task("", total=None)
                     
                     while True:
                         await asyncio.sleep(2)

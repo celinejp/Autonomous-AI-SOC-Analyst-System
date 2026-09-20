@@ -6,7 +6,6 @@ from datetime import datetime
 import asyncio
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 
 from app.models.agent_state import AgentState
 from app.agents.ingest_agent import ingest_agent
@@ -45,7 +44,6 @@ def should_continue_reflection(state: AgentState) -> str:
 
 
 _workflow_app = None
-_workflow_app_streaming = None
 
 
 def create_workflow():
@@ -81,71 +79,12 @@ def create_workflow():
     workflow.add_edge("plan_response", END)
     workflow.set_entry_point("ingest")
 
-    memory = MemorySaver()
-    _workflow_app = workflow.compile(checkpointer=memory)
+    # No checkpointer: a run lives entirely inside one worker call and the final state is
+    # assembled from the streamed node updates. (MemorySaver kept every run's state in process
+    # memory forever and could not resume across a restart anyway.)
+    _workflow_app = workflow.compile()
 
     return _workflow_app
-
-
-async def run_workflow(
-    raw_logs: list[str],
-    incident_id: str = None,
-    stream: bool = False,
-) -> AsyncGenerator[Dict[str, Any], None]:
-    """Run the workflow and optionally stream updates."""
-    workflow_app = create_workflow()
-    
-    if incident_id is None:
-        incident_id = str(uuid.uuid4())
-
-    initial_state: AgentState = {
-        "logs": [],
-        "raw_logs": raw_logs,
-        "alerts": [],
-        "threat_intel": {},
-        "incident_report": None,
-        "response_plan": None,
-        "confidence": 0.0,
-        "iteration": 0,
-        "needs_revision": False,
-        "critique_feedback": None,
-        "messages": [],
-        "agent_execution_log": [],
-        "incident_id": incident_id,
-    }
-
-    config = {"configurable": {"thread_id": incident_id}}
-
-    try:
-        if stream:
-            async for event in workflow_app.astream(initial_state, config=config, stream_mode="values"):
-                yield {
-                    "type": "state_update",
-                    "data": event,
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-            
-            final_state = await workflow_app.ainvoke(initial_state, config=config)
-            yield {
-                "type": "complete",
-                "data": final_state,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-        else:
-            final_state = await workflow_app.ainvoke(initial_state, config=config)
-            yield {
-                "type": "complete",
-                "data": final_state,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-    except Exception as e:
-        logger.error("Workflow execution error", error=str(e), incident_id=incident_id)
-        yield {
-            "type": "error",
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-        raise
 
 
 async def run_workflow_with_events(
@@ -174,19 +113,13 @@ async def run_workflow_with_events(
         "incident_id": incident_id,
     }
 
-    config = {"configurable": {"thread_id": incident_id}}
-    
     # Track which agents have been seen
     seen_agents = set()
     last_state = initial_state.copy()
     
     try:
         # Use updates mode to get node-level events
-        async for event in workflow_app.astream(
-            initial_state, 
-            config=config, 
-            stream_mode="updates"
-        ):
+        async for event in workflow_app.astream(initial_state, stream_mode="updates"):
             # event is a dict with node name as key
             for node_name, node_output in event.items():
                 if node_name == "__end__":
@@ -223,13 +156,9 @@ async def run_workflow_with_events(
                 # Small delay to allow frontend to process
                 await asyncio.sleep(0.1)
         
-        # Get final state
-        final_state = await workflow_app.aget_state(config)
-        final_values = final_state.values if hasattr(final_state, 'values') else last_state
-        
         yield {
             "type": "complete",
-            "data": serialize_state_for_stream(final_values),
+            "data": serialize_state_for_stream(last_state),
             "timestamp": datetime.utcnow().isoformat(),
         }
         

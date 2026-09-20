@@ -83,11 +83,9 @@ async def test_detection_accuracy_brute_force():
     assert max_severity >= 3, f"Expected high severity, got {max_severity}"
     
     # Check MITRE techniques
-    techniques = final_state.get("mitre_techniques", [])
-    technique_ids = [
-        t.get("technique_id", t) if isinstance(t, dict) else str(t)
-        for t in techniques
-    ]
+    # Techniques live on the alerts (the workflow state has no top-level "mitre_techniques" key;
+    # this test used to read that key and always saw an empty list).
+    technique_ids = [t for a in alerts for t in (a.get("mitre_techniques") or [])]
     assert any("T1110" in tid or "T1078" in tid for tid in technique_ids), \
         f"Expected T1110 or T1078, got {technique_ids}"
 
@@ -225,16 +223,19 @@ async def test_detection_agent_generates_alerts():
     from app.models.log_entry import LogEntry
     from datetime import datetime
     
+    # A burst of failed logins (a single failed login is deliberately NOT reported as brute force).
     logs = [
         LogEntry(
             timestamp=datetime.now(),
             source_ip="192.168.1.100",
             destination_ip="10.0.0.50",
-            action="AUTH FAILED",
-            status="failed",
+            action="login_failed",
+            status="failure",
+            auth_result="failure",
             log_source="auth",
             raw_log="AUTH FAILED user=admin",
         )
+        for _ in range(4)
     ]
     
     state: AgentState = {
@@ -261,7 +262,7 @@ async def test_detection_agent_generates_alerts():
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(1500)  # 5 scenarios x ~2-3 min each on a local llama3.1
 async def test_all_scenarios_complete():
     """Run all test scenarios and verify they complete."""
     scenarios = load_test_scenarios()
@@ -313,16 +314,15 @@ async def test_workflow_timeout_handling():
     large_logs = [f"2024-01-15 10:00:{i:02d} LOG ENTRY {i}" for i in range(100)]
     
     try:
-        async for event in asyncio.wait_for(
-            run_workflow_with_events(large_logs, "test-timeout"),
-            timeout=90.0
-        ):
-            if event.get("type") == "error":
-                # Errors are acceptable for timeout tests
-                break
-            elif event.get("type") == "complete":
-                break
-    except asyncio.TimeoutError:
+        # asyncio.wait_for cannot wrap an async generator; asyncio.timeout bounds the whole loop.
+        async with asyncio.timeout(90):
+            async for event in run_workflow_with_events(large_logs, "test-timeout"):
+                if event.get("type") == "error":
+                    # Errors are acceptable for timeout tests
+                    break
+                elif event.get("type") == "complete":
+                    break
+    except TimeoutError:
         # Timeout is expected for this test
         pass
 
@@ -386,3 +386,41 @@ async def test_response_plan_generation():
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short", "-m", "integration"])
 
+
+
+# ---- Real attack captures (public Splunk attack_data) through the full workflow -----------------
+# Needs the data cache: run `python scripts/eval_public_datasets.py --splunk-only` once.
+PUBLIC = Path(__file__).parent.parent / "data" / "public" / "splunk" / "datasets" / "attack_techniques"
+REAL_CAPTURES = [
+    ("T1070.001", "windows_event_log_cleared/windows-security.log"),
+    ("T1543.003", "atomic_red_team/remcom_windows-system.log"),
+    ("T1047", "lateral_movement/wmi_remote_process_powershell.log"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("technique,relative", REAL_CAPTURES)
+async def test_real_public_capture_end_to_end(technique, relative):
+    """A real attack capture goes through all six agents: it must raise an alert for that technique
+    and produce a report and a response plan."""
+    from scripts.eval_public_datasets import split_events
+
+    path = PUBLIC / technique / relative
+    if not path.exists():
+        pytest.skip("public dataset cache missing (run scripts/eval_public_datasets.py --splunk-only)")
+    events = split_events(path.read_text(errors="ignore"))[:300]
+
+    final_state = None
+    async for event in run_workflow_with_events(events, f"real-{technique}"):
+        if event.get("type") == "complete":
+            final_state = event.get("data")
+        elif event.get("type") == "error":
+            pytest.fail(f"Workflow error: {event.get('error')}")
+
+    assert final_state, "workflow did not complete"
+    techniques = {t for a in final_state["alerts"] for t in (a.get("mitre_techniques") or [])}
+    assert any(t.split(".")[0] == technique.split(".")[0] for t in techniques), f"{technique} not detected: {techniques}"
+    assert final_state.get("incident_report"), "no incident report"
+    assert final_state.get("response_plan"), "no response plan"

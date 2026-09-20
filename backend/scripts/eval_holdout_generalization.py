@@ -25,8 +25,9 @@ sys.path.insert(0, str(ROOT))
 from app.agents.detection_agent import detection_agent
 from app.agents.ingest_agent import ingest_agent
 
-CASES_PATH = ROOT / "data" / "holdout_generalization_cases.json"
-RESULTS_PATH = ROOT / "tests" / "results" / "holdout_generalization_report.json"
+# Optional argument: path to another case file, e.g. data/holdout_v2_cases.json
+CASES_PATH = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "data" / "holdout_generalization_cases.json"
+RESULTS_PATH = ROOT / "tests" / "results" / f"{CASES_PATH.stem}_report.json"
 
 
 async def run_case(raw_logs: List[str]) -> tuple[list, list]:

@@ -1,7 +1,7 @@
 """Redis caching utilities for FastAPI endpoints."""
 
 from functools import wraps
-from typing import Optional, Callable, Any, List
+from typing import Optional, Callable, List
 import json
 import hashlib
 
@@ -118,39 +118,3 @@ async def invalidate_incident_caches() -> None:
 def cache_key(*parts: str) -> str:
     """Build a cache key from parts."""
     return ":".join(str(p) for p in parts)
-
-
-async def get_or_set(
-    key: str,
-    fetch_func: Callable,
-    ttl: int = 60,
-    default: Any = None,
-) -> Any:
-    """Async get-or-set cache helper."""
-    redis = get_redis_client()
-    try:
-        cached = await redis.get(key)
-        if cached:
-            return json.loads(cached)
-    except Exception:
-        pass
-
-    try:
-        value = await fetch_func() if asyncio_iscoroutinefunction(fetch_func) else fetch_func()
-        if value is not None:
-            try:
-                await redis.setex(key, ttl, json.dumps(value, default=str))
-            except Exception:
-                pass
-            return value
-    except Exception as e:
-        logger.error(f"Fetch function error: {e}")
-
-    return default
-
-
-def asyncio_iscoroutinefunction(func: Callable) -> bool:
-    import asyncio
-    import inspect
-
-    return asyncio.iscoroutinefunction(func) or inspect.iscoroutinefunction(func)

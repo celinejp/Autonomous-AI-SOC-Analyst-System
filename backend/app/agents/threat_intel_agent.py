@@ -2,7 +2,10 @@
 
 from datetime import datetime
 
-from app.core.llm_factory import get_llm
+from app.core.logging import get_logger
+
+from app.core.llm_factory import ainvoke_llm, get_llm
+from app.core.text_safety import UNTRUSTED_DATA_NOTICE, sanitize_untrusted, wrap_untrusted
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.agent_state import AgentState
@@ -13,6 +16,8 @@ from app.tools.mitre_search import (
     search_mitre_techniques,
     search_mitre_techniques_raw,
 )
+
+logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are a threat intelligence agent. Your role is to enrich security alerts with MITRE ATT&CK framework context and threat intelligence.
 
@@ -26,7 +31,9 @@ Use the available tools to:
 - get_mitre_technique: Get details about specific MITRE techniques
 - search_mitre_techniques: Search for techniques by description
 
-Output a structured threat intelligence report with MITRE mappings."""
+Output a structured threat intelligence report with MITRE mappings.
+
+""" + UNTRUSTED_DATA_NOTICE
 
 
 async def threat_intel_agent(state: AgentState) -> AgentState:
@@ -50,18 +57,23 @@ async def threat_intel_agent(state: AgentState) -> AgentState:
     # Analyze each alert for MITRE mappings
     for alert in alerts:
         # Prepare alert description for MITRE search
-        alert_text = f"{alert.title} {alert.description} {' '.join(alert.detection_rule)}"
+        # detection_rule is a string; the old ' '.join(...) spaced it out letter by letter.
+        alert_text = sanitize_untrusted(f"{alert.title} {alert.description} {alert.detection_rule}", 1000)
         
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Analyze this alert and identify relevant MITRE ATT&CK techniques:\n\n{alert_text}\n\nUse tools to retrieve detailed technique information."),
+            HumanMessage(content=f"Analyze this alert and identify relevant MITRE ATT&CK techniques:\n\n{wrap_untrusted(alert_text)}\n\nUse tools to retrieve detailed technique information."),
         ]
 
-        response = await llm.ainvoke(messages)
+        try:
+            response = await ainvoke_llm(llm, messages)
+        except Exception as e:  # tool-calling is optional: grounding below uses the vector search
+            logger.warning("threat_intel_agent: LLM call failed, using vector grounding only: %s", e)
+            response = None
 
         # Extract tool calls
         tool_calls = []
-        if hasattr(response, "tool_calls"):
+        if response is not None and hasattr(response, "tool_calls"):
             tool_calls = response.tool_calls
 
         # Ground truth for this alert: technique IDs whose embedding similarity to the
@@ -101,14 +113,8 @@ async def threat_intel_agent(state: AgentState) -> AgentState:
                         looked_up_ids.add(tid)
                         mitre_ids.add(tid)
 
-        # Alerts from evaluate_attack_rules/_rule_based_detection carry a deterministic,
-        # already-precise technique_id (identified by their detection_rule provenance,
-        # matching the same is_rule check detection_agent._filter_alerts uses) - trust
-        # those outright. Alerts from the detection-stage LLM can name any technique ID
-        # with no similarity check of its own, so ground those the same way as every
-        # other LLM-sourced ID above - confirmed live this was the actual cause of MITRE
-        # precision collapsing (0.944 -> as low as 0.243) once a larger, denser technique
-        # catalog made an ungrounded guess likely to coincidentally exist in Qdrant.
+        # Rule-generated technique IDs are trusted; IDs named by the LLM are kept only if the
+        # similarity search above corroborates them (ungrounded LLM guesses hurt precision badly).
         is_rule_alert = (
             (alert.detection_rule or "").startswith("ATT&CK Rule")
             or (alert.detection_rule or "").startswith("rule:")
