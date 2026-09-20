@@ -8,8 +8,8 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.api.routes import (
-    incidents, ingest, analysis, health, siem, response, semantic_search,
-    stream, validation, dashboard, performance, debug, synthetic_data, metrics, organization
+    incidents, ingest, analysis, health, semantic_search,
+    stream, validation, dashboard, performance, debug, synthetic_data, metrics
 )
 
 # Configure logging
@@ -58,8 +58,6 @@ app.include_router(health.router, prefix="/api/health", tags=["health"])
 app.include_router(incidents.router, prefix="/api/incidents", tags=["incidents"])
 app.include_router(ingest.router, prefix="/api/ingest", tags=["ingest"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
-app.include_router(siem.router, prefix="/api/siem", tags=["siem"])
-app.include_router(response.router, prefix="/api/response", tags=["response"])
 app.include_router(semantic_search.router, tags=["semantic-search"])
 app.include_router(stream.router, tags=["streaming"])
 app.include_router(validation.router, tags=["validation"])
@@ -68,7 +66,6 @@ app.include_router(performance.router, tags=["performance"])
 app.include_router(debug.router, prefix="/api/debug", tags=["debug"])
 app.include_router(synthetic_data.router, prefix="/api/synthetic", tags=["synthetic-data"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["metrics"])
-app.include_router(organization.router, prefix="/api/organization", tags=["organization"])
 
 
 @app.on_event("startup")

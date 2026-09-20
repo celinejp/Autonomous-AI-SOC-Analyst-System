@@ -56,9 +56,6 @@ export interface ResponseAction {
 export interface IOCEntry {
   value: string;
   type: 'ip' | 'domain' | 'url' | 'hash' | 'email';
-  reputation?: string;
-  first_seen?: string;
-  last_seen?: string;
   related_techniques: string[];
   confidence: 'low' | 'medium' | 'high';
   recommended_action: 'block' | 'monitor' | 'investigate';
@@ -81,13 +78,8 @@ export interface IncidentReport {
   impact_assessment: string;
   confidence_score: number;
   reasoning_process: string[];
-  impacted_assets?: any[];
   indicators_of_compromise?: IOCCollection | null;
-  data_completeness?: any;
-  confidence_assessment?: any;
-  regulatory_impact?: any;
   detection_gaps?: any[];
-  proposed_detection_rules?: any[];
   lessons_learned?: string[];
 }
 
@@ -102,9 +94,6 @@ export interface ResponsePlan {
   remediation_actions?: ResponseAction[];
   long_term_improvements?: ResponseAction[];
   actions_by_team: Record<string, ResponseAction[]>;
-  stakeholder_notifications?: any[];
-  ioc_blocklist_updates?: any;
-  detection_rule_updates?: any[];
 }
 
 export interface Incident {
@@ -138,17 +127,12 @@ export interface DashboardStats {
 
 export interface SOCMetrics {
   mttd_seconds: number;
-  mttr_seconds: number;
-  mttc_seconds: number;
   false_positive_rate: number;
   true_positive_rate: number;
-  escalation_accuracy: number;
   alerts_received: number;
   alerts_closed: number;
   alerts_escalated: number;
   incidents_created: number;
-  ai_triage_rate: number;
-  ai_accuracy: number;
   alert_reduction_ratio: number;
   attack_technique_coverage: Record<string, boolean>;
   period_start: string;

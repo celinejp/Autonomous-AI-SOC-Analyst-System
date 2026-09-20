@@ -169,74 +169,6 @@ async def generate_from_fixtures(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/compare-models")
-async def compare_models(
-    test_logs: List[str] = Body(..., description="Test logs to compare models"),
-):
-    """
-    STEP 4: Compare Teacher vs Student model performance.
-    
-    Benchmarks:
-    - Detection accuracy
-    - Analysis speed
-    - Cost per analysis
-    - F1 Score
-    """
-    import time
-    
-    try:
-        # Run teacher model (current LLM)
-        teacher_start = time.time()
-        teacher_result = await generate_synthetic_incident(test_logs)
-        teacher_duration = time.time() - teacher_start
-        
-        # Use student model when STUDENT_MODEL_NAME is set and a loader exists; else teacher as placeholder
-        student_model_name = (settings.student_model_name or "distilled-soc-llama").strip() or "distilled-soc-llama"
-        student_start = time.time()
-        student_result = await generate_synthetic_incident(test_logs)
-        student_duration = time.time() - student_start
-        
-        # Calculate metrics
-        teacher_severity = teacher_result["output"]["severity"] if teacher_result else "unknown"
-        student_severity = student_result["output"]["severity"] if student_result else "unknown"
-        
-        teacher_mitre = set(teacher_result["output"]["mitre_techniques"]) if teacher_result else set()
-        student_mitre = set(student_result["output"]["mitre_techniques"]) if student_result else set()
-        
-        # Calculate accuracy
-        severity_match = teacher_severity == student_severity
-        mitre_accuracy = len(teacher_mitre & student_mitre) / len(teacher_mitre) if teacher_mitre else 0.0
-        
-        return {
-            "status": "success",
-            "teacher_model": {
-                "provider": settings.llm_provider,
-                "model": settings.llm_model,
-                "severity": teacher_severity,
-                "mitre_techniques": list(teacher_mitre),
-                "duration_seconds": round(teacher_duration, 2),
-                "cost_per_analysis": "TBD",  # Calculate based on tokens
-            },
-            "student_model": {
-                "model": student_model_name,
-                "severity": student_severity,
-                "mitre_techniques": list(student_mitre),
-                "duration_seconds": round(student_duration, 2),
-                "cost_per_analysis": "$0.00",  # Local model is free
-            },
-            "comparison": {
-                "severity_match": severity_match,
-                "mitre_accuracy": round(mitre_accuracy, 2),
-                "speedup": round(teacher_duration / student_duration, 2) if student_duration > 0 else 1.0,
-                "cost_reduction": "100%",  # Local is free
-            },
-            "note": "Set STUDENT_MODEL_NAME (and optionally STUDENT_LLM_PROVIDER) when a distilled model is available; until then teacher is used as placeholder.",
-        }
-    except Exception as e:
-        logger.error(f"Model comparison error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/dataset-stats")
 async def get_dataset_stats():
     """Get statistics about generated training datasets."""
@@ -272,4 +204,3 @@ async def get_dataset_stats():
     except Exception as e:
         logger.error(f"Dataset stats error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

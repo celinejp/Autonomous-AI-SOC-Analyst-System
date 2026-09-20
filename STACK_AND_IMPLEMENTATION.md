@@ -15,7 +15,7 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | **Charts** | Recharts | Dashboards, severity/custom charts |
 | **Real-time** | Fetch + ReadableStream (SSE) | Demo mode live agent stream |
 
-**Role:** User interface for SOC analysts: ingest logs, run demos, view incidents, dashboard, insights, health, settings, debug, synthetic log generation.
+**Role:** User interface for SOC analysts: ingest logs, run demos, view incidents, dashboard, insights, health, debug, synthetic log generation.
 
 ---
 
@@ -23,7 +23,7 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | Layer | Technology | Role |
 |-------|------------|------|
 | **Framework** | FastAPI | REST + SSE, async, OpenAPI docs |
-| **Routers** | 15 route modules | Health, incidents, ingest, stream, dashboard, metrics, organization, debug, synthetic, analysis, SIEM, response, semantic search, validation, performance |
+| **Routers** | 12 route modules | Health, incidents, ingest, stream, dashboard, metrics, debug, synthetic, analysis, semantic search, validation, performance |
 
 **Role:** HTTP API and streaming; orchestrates agents, DB, cache, and external services.
 
@@ -35,7 +35,7 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | **Orchestration** | LangGraph | Multi-agent state machine, reflection loop (critic → re-analyze) |
 | **Agents** | 6 agents (Ingest, Detection, Threat Intel, Analyst, Critic, Response Planner) | Parse logs, detect threats, enrich with ATT&CK, write report, critique, produce response plan |
 | **LLM** | Multi-provider (Ollama, OpenAI, Groq, Anthropic) | Agent prompts and tool use |
-| **Tools** | LangChain tools | IP lookup, MITRE search, file/domain intel (demo data) |
+| **Tools** | LangChain tools | MITRE search, similar-incident search |
 
 **Role:** End-to-end analysis pipeline from raw logs to incident report and response plan.
 
@@ -47,7 +47,7 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | **Primary DB** | PostgreSQL + pgvector | Incidents, alerts, reports, response plans, org profile, agent logs, log entries |
 | **Cache** | Redis | Incident status during analysis, API response cache |
 | **Vector DB** | Qdrant | Semantic search, threat intel (when used) |
-| **Migrations** | SQL scripts under `backend/scripts/migrations/` | Schema for incidents, reports, response_plans, organization_profile, etc. |
+| **Migrations** | SQL scripts under `backend/scripts/migrations/` | Schema for incidents, reports, response_plans, etc. |
 
 **Role:** Persistence, caching, and vector search for the pipeline and UI.
 
@@ -75,7 +75,6 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | **Dashboard** | `/api/dashboard/stats` | Home: cards, top MITRE, quick links | Full |
 | **Metrics** | `/api/metrics/soc-kpis`, `/api/metrics/attack-coverage` | Home + Insights: SOC KPIs, ATT&CK coverage | Full |
 | **Health** | `/api/health/basic`, `/api/health/deep` | Health page, Refresh / Deep Check | Full |
-| **Organization** | `GET/PUT /api/organization/profile` + DB persistence | Settings page: load/save profile | Full |
 | **Debug** | `GET /api/debug/last-analysis/:id`, `GET /api/debug/agent-traces` | Debug page: last analysis by incident, recent traces | Full |
 | **Synthetic** | `POST /api/synthetic/generate` | Ingest → “Generate synthetic” → fill textarea | Full |
 
@@ -84,8 +83,6 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | Area | Backend | Frontend | Connection |
 |------|---------|----------|------------|
 | **Search** | Semantic + MITRE search APIs | Search page: semantic incident search, MITRE technique search | Full |
-| **Integrations** | `/api/siem/...` (Splunk/ELK ingest & export) | Integrations page: ingest tab, export tab | Full |
-| **Response actions** | `/api/response/block-ip`, disable-account, execution-log | Incident detail: Block IP, Disable account, Load execution log | Full |
 | **Validation** | Validation router (metrics, validate, aggregate) | Debug page: Validation card (incident metrics + aggregate) | Full |
 | **Performance** | Performance routes (Redis/metrics) | Debug page: Performance card | Full |
 
@@ -111,15 +108,15 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ FRONTEND (Next.js 15, React, TanStack Query)                             │
 │   Pages: / (Dashboard), /ingest, /incidents, /incident/[id], /search,   │
-│          /integrations, /insights, /health, /settings, /debug           │
+│          /insights, /health, /debug                          │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │ HTTP + SSE (NEXT_PUBLIC_API_URL → backend)
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ BACKEND API (FastAPI, container: backend)                                │
 │   Connected to UI: health, incidents, ingest, stream (v1), dashboard,   │
-│                    metrics, organization, debug, synthetic, search,    │
-│                    integrations (SIEM), response actions, validation,  │
+│                    metrics, debug, synthetic, search,                   │
+│                    validation,                                            │
 │                    performance. Optional: analysis (alternate stream).  │
 │   Runs the LangGraph workflow INLINE only for the /v1/incidents/stream  │
 │   (Demo Mode SSE) path - everything else below is queued instead.       │
@@ -158,7 +155,7 @@ Overview of the **tech stack and each component’s role**, what is **implemente
         ┌───────┴───────┐
         ▼               ▼
   Qdrant (optional)   Tools
-  (semantic search)  (IP, MITRE, file/domain)
+  (semantic search)  (MITRE, similar incidents)
 ```
 
 ---
@@ -171,7 +168,6 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | **UI ↔ Ingest** | End-to-end | Upload/paste → analyze; demo → stream → incident |
 | **UI ↔ Dashboard/Metrics** | End-to-end | Stats, SOC KPIs, ATT&CK coverage |
 | **UI ↔ Health** | End-to-end | Basic + deep checks |
-| **UI ↔ Settings** | End-to-end | Org profile load/save, persisted in DB when table exists |
 | **UI ↔ Debug** | End-to-end | Last analysis by incident, agent traces |
 | **UI ↔ Synthetic** | End-to-end | Generate logs → fill textarea |
 | **Backend ↔ PostgreSQL** | Full | Incidents, reports, plans, org profile, agent logs, log entries |
@@ -180,15 +176,12 @@ Overview of the **tech stack and each component’s role**, what is **implemente
 | **Backend ↔ LLM** | Full | All agents use configured provider |
 | **Backend ↔ Qdrant** | Optional | Used by semantic/search tools when configured |
 | **UI ↔ Search** | End-to-end | Semantic incident search, MITRE technique search |
-| **UI ↔ Integrations (SIEM)** | End-to-end | Ingest (Splunk/ELK), Export |
-| **UI ↔ Response actions** | End-to-end | Block IP, disable account, execution log (incident page) |
 | **UI ↔ Validation / Performance** | End-to-end | Debug page cards |
 
 ---
 
 ## 5. What is left (optional / future)
 
-- **Fine-tuned student model** – Synthetic pipeline uses teacher model; set `STUDENT_MODEL_NAME` (and provider if needed) when a distilled model is available.
 - **E2E tests** – `test_all_features.sh` and `backend/scripts/test_all_features.py` cover health, ingest, incidents, dashboard, metrics, debug; expand as needed.
 
 Everything required for the main analyst flow is **implemented and connected** end-to-end.

@@ -186,15 +186,6 @@ export const api = {
     deep: (): Promise<any> => fetchAPI('/health/deep'),
   },
 
-  // ========== ORGANIZATION ==========
-  organization: {
-    getProfile: (): Promise<any> => fetchAPI('/organization/profile'),
-    updateProfile: (data: any): Promise<any> => fetchAPI('/organization/profile', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-  },
-
   // ========== DEBUG ==========
   debug: {
     getLastAnalysis: (incidentId: string): Promise<any> => fetchAPI(`/debug/last-analysis/${incidentId}`),
@@ -207,37 +198,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ count: count ?? 5 }),
     }),
-  },
-
-  // ========== SIEM ==========
-  siem: {
-    splunkIngest: (events: any[]): Promise<any> => fetchAPI('/siem/splunk/ingest', {
-      method: 'POST',
-      body: JSON.stringify(events),
-    }),
-    elkIngest: (events: any[]): Promise<any> => fetchAPI('/siem/elk/ingest', {
-      method: 'POST',
-      body: JSON.stringify(events),
-    }),
-    splunkExport: (incidentId?: string, limit?: number): Promise<any> =>
-      fetchAPI(`/siem/splunk/export?${incidentId ? `incident_id=${incidentId}` : ''}${limit ? `&limit=${limit}` : ''}`),
-    elkExport: (incidentId?: string, limit?: number): Promise<any> =>
-      fetchAPI(`/siem/elk/export?${incidentId ? `incident_id=${incidentId}` : ''}${limit ? `&limit=${limit}` : ''}`),
-  },
-
-  // ========== RESPONSE ACTIONS ==========
-  response: {
-    blockIp: (ipAddress: string, durationHours?: number): Promise<any> =>
-      fetchAPI('/response/block-ip', { method: 'POST', body: JSON.stringify({ ip_address: ipAddress, duration_hours: durationHours ?? 24 }) }),
-    unblockIp: (ipAddress: string): Promise<any> =>
-      fetchAPI(`/response/unblock-ip/${encodeURIComponent(ipAddress)}`, { method: 'POST' }),
-    disableAccount: (username: string, reason: string): Promise<any> =>
-      fetchAPI('/response/disable-account', { method: 'POST', body: JSON.stringify({ username, reason }) }),
-    enableAccount: (username: string): Promise<any> =>
-      fetchAPI(`/response/enable-account/${encodeURIComponent(username)}`, { method: 'POST' }),
-    executePlan: (incidentId: string, responsePlan: any): Promise<any> =>
-      fetchAPI('/response/execute-plan', { method: 'POST', body: JSON.stringify({ incident_id: incidentId, response_plan: responsePlan }) }),
-    executionLog: (): Promise<any> => fetchAPI('/response/execution-log'),
   },
 
   // ========== SEMANTIC SEARCH (v1) ==========

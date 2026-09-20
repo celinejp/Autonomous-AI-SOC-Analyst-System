@@ -10,8 +10,6 @@ interface IOC {
   value: string;
   confidence?: 'high' | 'medium' | 'low';
   recommended_action?: 'block' | 'monitor' | 'investigate';
-  first_seen?: string;
-  last_seen?: string;
 }
 
 interface IOCsTableProps {

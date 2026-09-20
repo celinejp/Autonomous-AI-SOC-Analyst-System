@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Upload, AlertTriangle, BarChart3, Heart, Settings, Bug, Search, Plug } from 'lucide-react';
+import { LayoutDashboard, Upload, AlertTriangle, BarChart3, Heart, Bug, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const navItems = [
@@ -11,9 +11,7 @@ const navItems = [
   { href: '/incidents', label: 'Incidents', icon: AlertTriangle },
   { href: '/search', label: 'Search', icon: Search },
   { href: '/insights', label: 'Insights', icon: BarChart3 },
-  { href: '/integrations', label: 'Integrations', icon: Plug },
   { href: '/health', label: 'Health', icon: Heart },
-  { href: '/settings', label: 'Settings', icon: Settings },
   { href: '/debug', label: 'Debug', icon: Bug },
 ];
 

@@ -104,6 +104,8 @@ class IncidentReportModel(Base):
     confidence_score = Column(Float, default=0.0, nullable=False)
     reasoning_process = Column(JSON, default=list)
     indicators_of_compromise = Column(JSON, default=None, nullable=True)
+    detection_gaps = Column(JSON, default=None, nullable=True)
+    lessons_learned = Column(JSON, default=None, nullable=True)
     embedding = Column(Vector(768), nullable=True)
 
     # Relationships

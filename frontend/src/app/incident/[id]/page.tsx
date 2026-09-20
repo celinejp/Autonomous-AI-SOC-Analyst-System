@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -10,68 +9,21 @@ import { useUpdateIncidentStatus } from '@/hooks/useUpdateIncidentStatus';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { formatDate, getSeverityColor, showNotification } from '@/lib/utils';
 import { Incident, IncidentStatus } from '@/types';
 import { IOCsTable } from '@/components/IOCsTable';
 import { ResponsePlanViewer } from '@/components/ResponsePlanViewer';
 import { IncidentStreamViewer } from '@/components/IncidentStreamViewer';
 import { TimelineChart } from '@/components/charts';
-import { Download, Copy, CheckCircle2, XCircle, Clock, Loader2, Shield, List } from 'lucide-react';
+import { Download, Copy, CheckCircle2, XCircle, Clock, Loader2 } from 'lucide-react';
 
 export default function IncidentDetailPage() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
   const id = params.id as string;
-  const [blockIp, setBlockIp] = useState('');
-  const [blockHours, setBlockHours] = useState(24);
-  const [disableUser, setDisableUser] = useState('');
-  const [disableReason, setDisableReason] = useState('');
-  const [responseLog, setResponseLog] = useState<any>(null);
-  const [responseLoading, setResponseLoading] = useState(false);
-
   const { data: incident, isLoading, error, isError } = useIncident(id);
   const updateStatusMutation = useUpdateIncidentStatus();
-
-  const handleBlockIp = async () => {
-    if (!blockIp.trim()) return;
-    setResponseLoading(true);
-    try {
-      await api.response.blockIp(blockIp.trim(), blockHours);
-      showNotification(`Block IP request sent: ${blockIp}`, 'success');
-    } catch (e) {
-      showNotification(e instanceof Error ? e.message : 'Block IP failed', 'error');
-    } finally {
-      setResponseLoading(false);
-    }
-  };
-
-  const handleDisableAccount = async () => {
-    if (!disableUser.trim()) return;
-    setResponseLoading(true);
-    try {
-      await api.response.disableAccount(disableUser.trim(), disableReason || 'Incident response');
-      showNotification(`Disable account request sent: ${disableUser}`, 'success');
-    } catch (e) {
-      showNotification(e instanceof Error ? e.message : 'Disable account failed', 'error');
-    } finally {
-      setResponseLoading(false);
-    }
-  };
-
-  const handleLoadExecutionLog = async () => {
-    setResponseLoading(true);
-    setResponseLog(null);
-    try {
-      const res = await api.response.executionLog();
-      setResponseLog(res?.log ?? res);
-    } catch (e) {
-      showNotification(e instanceof Error ? e.message : 'Load log failed', 'error');
-    } finally {
-      setResponseLoading(false);
-    }
-  };
 
   const isAnalyzing = incident?.status === IncidentStatus.IN_PROGRESS;
   
@@ -237,74 +189,6 @@ export default function IncidentDetailPage() {
               ⚠️ {error instanceof Error ? error.message : 'Failed to load incident'}
             </p>
           </div>
-        )}
-
-        {/* Response actions (block IP, disable account, execution log) */}
-        {incident && (
-          <Card className="bg-gray-900 border-gray-800 mb-6">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center space-x-2">
-                <Shield className="h-5 w-5" />
-                <span>Response actions</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-3 bg-gray-800 rounded-lg">
-                  <p className="text-sm text-gray-400 mb-2">Block IP</p>
-                  <div className="flex gap-2 flex-wrap">
-                    <Input
-                      value={blockIp}
-                      onChange={(e) => setBlockIp(e.target.value)}
-                      placeholder="IP address"
-                      className="bg-gray-900 border-gray-700 text-white flex-1 min-w-[120px]"
-                    />
-                    <Input
-                      type="number"
-                      value={blockHours}
-                      onChange={(e) => setBlockHours(parseInt(e.target.value, 10) || 24)}
-                      className="bg-gray-900 border-gray-700 text-white w-20"
-                    />
-                    <span className="text-gray-500 text-sm self-center">hours</span>
-                    <Button size="sm" onClick={handleBlockIp} disabled={responseLoading || !blockIp.trim()}>
-                      {responseLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Block'}
-                    </Button>
-                  </div>
-                </div>
-                <div className="p-3 bg-gray-800 rounded-lg">
-                  <p className="text-sm text-gray-400 mb-2">Disable account</p>
-                  <div className="flex gap-2 flex-wrap">
-                    <Input
-                      value={disableUser}
-                      onChange={(e) => setDisableUser(e.target.value)}
-                      placeholder="Username"
-                      className="bg-gray-900 border-gray-700 text-white flex-1 min-w-[100px]"
-                    />
-                    <Input
-                      value={disableReason}
-                      onChange={(e) => setDisableReason(e.target.value)}
-                      placeholder="Reason"
-                      className="bg-gray-900 border-gray-700 text-white flex-1 min-w-[100px]"
-                    />
-                    <Button size="sm" onClick={handleDisableAccount} disabled={responseLoading || !disableUser.trim()}>
-                      {responseLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Disable'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              <div>
-                <Button variant="outline" size="sm" onClick={handleLoadExecutionLog} disabled={responseLoading} className="flex items-center gap-2">
-                  <List className="h-4 w-4" />
-                  {responseLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Load execution log'}
-                </Button>
-                {responseLog != null && (
-                  <pre className="mt-2 p-3 bg-gray-800 rounded text-xs text-gray-300 overflow-auto max-h-32">
-                    {Array.isArray(responseLog) ? responseLog.join('\n') : JSON.stringify(responseLog, null, 2)}
-                  </pre>
-                )}
-              </div>
-            </CardContent>
-          </Card>
         )}
 
         {/* Real-time Analysis Stream */}
@@ -507,39 +391,20 @@ export default function IncidentDetailPage() {
           </Card>
         )}
 
-        {/* Regulatory Impact & Lessons Learned */}
-        {(incident?.report?.regulatory_impact || incident?.report?.lessons_learned) && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {incident.report.regulatory_impact && (
-              <Card className="bg-gray-900 border-gray-800">
-                <CardHeader>
-                  <CardTitle className="text-white">Regulatory Impact</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-gray-300 text-sm whitespace-pre-wrap">
-                    {typeof incident.report.regulatory_impact === 'string'
-                      ? incident.report.regulatory_impact
-                      : JSON.stringify(incident.report.regulatory_impact, null, 2)}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {incident.report.lessons_learned && incident.report.lessons_learned.length > 0 && (
-              <Card className="bg-gray-900 border-gray-800">
-                <CardHeader>
-                  <CardTitle className="text-white">Lessons Learned</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ul className="list-disc list-inside space-y-2 text-gray-300 text-sm">
-                    {incident.report.lessons_learned.map((lesson, idx) => (
-                      <li key={idx}>{lesson}</li>
-                    ))}
-                  </ul>
-                </CardContent>
-              </Card>
-            )}
-          </div>
+        {/* Lessons Learned */}
+        {incident?.report?.lessons_learned && incident.report.lessons_learned.length > 0 && (
+          <Card className="bg-gray-900 border-gray-800">
+            <CardHeader>
+              <CardTitle className="text-white">Lessons Learned</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ul className="list-disc list-inside space-y-2 text-gray-300 text-sm">
+                {incident.report.lessons_learned.map((lesson, idx) => (
+                  <li key={idx}>{lesson}</li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
         )}
 
         {/* Detection Gaps */}

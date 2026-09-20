@@ -65,7 +65,6 @@ async def critic_agent(state: AgentState) -> AgentState:
 
     # Prepare comprehensive critique context
     has_iocs = bool(incident_report.indicators_of_compromise) if hasattr(incident_report, 'indicators_of_compromise') and incident_report.indicators_of_compromise else False
-    has_regulatory = bool(incident_report.regulatory_impact) if hasattr(incident_report, 'regulatory_impact') and incident_report.regulatory_impact else False
     has_detection_gaps = bool(incident_report.detection_gaps) if hasattr(incident_report, 'detection_gaps') and incident_report.detection_gaps else False
     has_lessons = bool(incident_report.lessons_learned) if hasattr(incident_report, 'lessons_learned') and incident_report.lessons_learned else False
     
@@ -85,7 +84,6 @@ REPORT COMPLETENESS:
 - Has Technical Findings: Yes
 - Has Timeline: {len(incident_report.timeline) > 0}
 - Has IOCs: {has_iocs}
-- Has Regulatory Impact: {has_regulatory}
 - Has Detection Gaps: {has_detection_gaps}
 - Has Lessons Learned: {has_lessons}
 

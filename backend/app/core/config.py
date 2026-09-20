@@ -12,15 +12,11 @@ class Settings(BaseSettings):
     # LLM Provider Configuration
     llm_provider: str = "ollama"  # Options: ollama, openai, groq, anthropic
     llm_model: str = "default"  # Model name (defaults per provider)
-    # Optional student model for synthetic comparison (when set, comparison uses this name; load when available)
-    student_model_name: str = ""
-    student_llm_provider: str = ""  # If set, use this provider for student; else same as llm_provider
     
     # API Keys (optional based on provider)
     anthropic_api_key: str = ""  # Required if provider=anthropic
     openai_api_key: str = ""  # Required if provider=openai
     groq_api_key: str = ""  # Required if provider=groq
-    abuseipdb_api_key: str = ""
 
     # Ollama Configuration (for local LLM)
     ollama_base_url: str = "http://localhost:11434"  # Default Ollama URL

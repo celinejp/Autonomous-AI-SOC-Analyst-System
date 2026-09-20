@@ -18,8 +18,8 @@ This system autonomously analyzes security logs, detects threats, enriches findi
   Audit Log JSON shapes when pasted/uploaded - there is no live connection to AWS, Azure, or
   GCP (no SDKs, no credentials, no API polling); you export or paste the logs yourself
 - **Enhanced SOC Features**: Structured IOCs (real, see [System Capabilities](#soc-features)),
-  role-based response plans; regulatory impact is schema-only, not yet populated
-- **SOC KPI Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
+  role-based response plans
+- **SOC KPI Metrics**: MTTD, false positive rate, alerts per incident (computed from stored incidents)
 - **Modern Tech Stack**: FastAPI + Next.js 15 + LangGraph + Multi-LLM support
 - **Dockerized**: one-command local stack (Postgres/pgvector, Redis, Qdrant, backend, worker, frontend), structured logging
 - **UI**: shadcn/ui components, Recharts visualizations (severity distribution, attack timeline)
@@ -68,7 +68,7 @@ SSE, without touching the Redis Streams queue or the worker at all. See
        │
        ▼
 ┌─────────────┐
-│Threat Intel │  MITRE ATT&CK mapping, IP reputation, similarity search
+│Threat Intel │  MITRE ATT&CK mapping, similarity search
 │Agent        │  Threat intelligence enrichment
 └──────┬──────┘
        │
@@ -94,7 +94,7 @@ SSE, without touching the Redis Streams queue or the worker at all. See
                     ▼
         ┌───────────────────┐
         │ Response Planner  │  Role-based actions, team assignments
-        │ Agent             │  Team assignments, approval workflows
+        │ Agent             │  Priority-ordered actions per team
         └───────────────────┘
 ```
 
@@ -104,11 +104,10 @@ SSE, without touching the Redis Streams queue or the worker at all. See
 - **Framework**: FastAPI (async/await, high performance)
 - **AI/LLM**: Multi-provider support (Ollama, OpenAI, Groq, Anthropic)
 - **Orchestration**: LangGraph (state machine with reflection loops)
-- **Tools**: LangChain (IP lookup, MITRE search, file/domain intel)
+- **Tools**: LangChain (MITRE search, similar-incident search)
 - **Vector DB**: Qdrant (semantic search, threat intelligence)
 - **Primary DB**: PostgreSQL with pgvector (structured data, incidents)
-- **Cache**: Redis (session, rate limiting, API caching)
-- **ML**: Statistical anomaly detection
+- **Cache / queue**: Redis (Streams job queue, incident status, rate limiting, API caching)
 
 #### Frontend (Next.js 15)
 - **Framework**: Next.js 15 (App Router, React 18)
@@ -128,7 +127,6 @@ SSE, without touching the Redis Streams queue or the worker at all. See
   - **Groq** (FREE tier) - [Get API key](https://console.groq.com/)
   - **OpenAI** (FREE tier available) - [Get API key](https://platform.openai.com/)
   - **Anthropic** (paid) - [Get API key](https://console.anthropic.com/)
-- (Optional) AbuseIPDB API key for IP reputation lookups
 
 ### Installation
 
@@ -248,14 +246,11 @@ Navigate to `/incidents` to see all incidents, or click on a specific incident t
 - MITRE ATT&CK technique mappings (any of the ~700 loaded techniques, not just the 24 with a native detection rule)
 - Evidence and timeline
 - Actionable response plan with team assignments (update action status)
-- Response actions: Block IP, Disable account, execution log
 
-### 4. Search, Integrations, Health & Debug
+### 4. Search, Health & Debug
 
 - **Search** (`/search`): Semantic incident search and MITRE ATT&CK technique search.
-- **Integrations** (`/integrations`): SIEM ingest (Splunk/ELK) and export.
 - **Health** (`/health`): Basic and deep health checks (API, DB, Redis, Qdrant, agents).
-- **Settings** (`/settings`): Organization profile (industry, regulations, crown jewels).
 - **Debug** (`/debug`): Last analysis by incident, agent traces, validation metrics, performance.
 
 ### 5. View Insights & Metrics
@@ -265,7 +260,7 @@ Navigate to `/insights` for:
 - Top MITRE techniques
 - False positive rates
 - Agent performance metrics
-- SOC KPIs (MTTD, MTTR, alert reduction)
+- SOC KPIs (MTTD, false positive rate, alerts per incident)
 
 ## 🔧 API Endpoints
 
@@ -278,9 +273,8 @@ Navigate to `/insights` for:
 - `GET /api/health/deep` - Deep health check (tests all agents)
 
 ### SOC Enhancement Endpoints
-- `GET /api/metrics/soc-kpis` - SOC KPI metrics (MTTD, MTTR, etc.)
+- `GET /api/metrics/soc-kpis` - SOC KPI metrics (MTTD, false positive rate, alerts per incident)
 - `GET /api/metrics/attack-coverage` - MITRE ATT&CK coverage (24 techniques)
-- `GET /api/organization/profile` - Organization profile
 
 ### Advanced Endpoints
 - `POST /api/v1/incidents/stream` - Demo mode: stream agent execution (SSE)
@@ -289,8 +283,6 @@ Navigate to `/insights` for:
 - `GET /api/debug/agent-traces` - Recent agent traces
 - `POST /api/v1/incidents/search/semantic` - Semantic incident search
 - `GET /api/v1/mitre/search` - MITRE technique search
-- `POST /api/siem/splunk/ingest`, `POST /api/siem/elk/ingest` - SIEM ingest
-- `GET /api/response/execution-log` - Response action execution log
 - `GET /api/v1/performance/metrics` - Performance/Redis metrics
 - `GET /api/v1/validate/aggregate` - Validation aggregate
 
@@ -330,34 +322,21 @@ The Detection Agent identifies:
 
 ### SOC Features
 
-- **Structured Incident Reports**: Executive summary, technical findings, detection gaps, and
-  structured `indicators_of_compromise` - see below. The `IncidentReport` model also declares
-  `regulatory_impact`, `confidence_assessment`, and `data_completeness` fields, but no agent
-  currently populates them - they're always `null` on every incident today. Treat those three
-  as schema reserved for future work, not a working feature.
+- **Structured Incident Reports**: Executive summary, technical findings, timeline, root cause,
+  impact assessment, detection gaps, lessons learned, and structured `indicators_of_compromise`
+  (see below). All of these are persisted and shown on the incident page.
 - **Structured IOCs, for real**: `indicators_of_compromise` is populated two ways and merged:
   (1) deterministically, straight from the structured `LogEntry` fields already tied to each
   alert - source/destination IP, file hashes, DNS queries, email addresses - so it's never
   dependent on the LLM choosing to comply, and (2) the Analyst LLM can add its own
-  judgment-based entries (e.g. a reputation-flagged IP) on top. Each entry carries a
+  judgment-based entries on top. Each entry carries a
   `confidence` and a severity-derived `recommended_action` (block/monitor/investigate).
   Persisted via `incident_reports.indicators_of_compromise` (migration
   `005_add_indicators_of_compromise.sql`) and rendered on the incident page's IOCs table.
 - **Role-Based Response Plans**: Team assignments (SOC, Network, Endpoint, IAM, Legal, PR, Management - whichever the LLM judges relevant per incident)
-- **IOC Blocklists (schema only, not implemented)**: `ResponsePlan.ioc_blocklist_updates` - a
-  separate field from the report's `indicators_of_compromise` above, meant for deployable
-  block instructions (firewall IP blocks, DNS sinkhole, EDR hash blocks) - is declared in the
-  model but nothing currently sets it; it's always empty.
-- **SOC Metrics**: MTTD, MTTR (real time-based metrics, though MTTR reads N/A until an incident actually gets marked resolved), false positive rate, alert reduction
-- **Organization Profiles**: Business context, critical assets, escalation matrix
-
-### ML Anomaly Detection
-
-- Baseline establishment from historical logs
-- Statistical anomaly detection (Z-score based)
-- Brute force pattern detection
-- Unusual IP/action detection
-- Per-log anomaly scoring
+- **SOC Metrics**: MTTD, false positive rate, alerts per incident. False positive rate only
+  moves if an incident is marked `false_positive` via `PUT /api/incidents/{id}/status`; the UI
+  has no button for that, so it normally reads 0%.
 
 ## Testing the System
 
@@ -460,19 +439,19 @@ Autonomous-AI-SOC-Analyst-System/
 ├── backend/
 │   ├── app/
 │   │   ├── agents/          # 6 AI agents
-│   │   ├── tools/           # LangChain tools (IP lookup, MITRE, file/domain intel)
+│   │   ├── tools/           # LangChain tools (MITRE search, similar-incident search)
 │   │   ├── orchestrator/    # LangGraph workflow
-│   │   ├── api/routes/      # FastAPI endpoints (health, incidents, ingest, stream, dashboard, metrics, organization, debug, synthetic, SIEM, response, semantic search, validation, performance)
-│   │   ├── models/          # Pydantic models (incident, log_entry, organization, etc.)
+│   │   ├── api/routes/      # FastAPI endpoints (health, incidents, ingest, stream, dashboard, metrics, debug, synthetic, semantic search, validation, performance)
+│   │   ├── models/          # Pydantic models (incident, log_entry, agent state)
 │   │   ├── database/        # DB connections & models
 │   │   ├── detection/       # ATT&CK-native detection rules (24 techniques)
-│   │   ├── services/        # Business logic (ML, Response, Metrics, Synthetic Data)
+│   │   ├── services/        # Business logic (incidents, metrics, embeddings, synthetic data)
 │   │   └── core/            # Config, logging, LLM factory
 │   ├── scripts/             # Data generation, DB init, migrations
 │   └── tests/               # Test suite with fixtures
 ├── frontend/
 │   └── src/
-│       ├── app/             # Next.js pages (dashboard, ingest, incidents, incident/[id], search, integrations, insights, health, settings, debug)
+│       ├── app/             # Next.js pages (dashboard, ingest, incidents, incident/[id], search, insights, health, debug)
 │       ├── components/     # UI components (charts, DemoStreamViewer, ResponsePlanViewer, Navigation, etc.)
 │       ├── lib/             # API client, utilities
 │       └── types/           # TypeScript definitions

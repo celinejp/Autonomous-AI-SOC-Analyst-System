@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database.models import IncidentModel, LogEntryModel
-from app.models.incident import Incident, Alert, MITRETechnique, IncidentReport, ResponsePlan, IncidentStatus, Severity, IOCCollection
+from app.models.incident import Incident, Alert, MITRETechnique, IncidentReport, ResponsePlan, IncidentStatus, Severity, IOCCollection, DetectionGap
 
 
 class IncidentRepository:
@@ -139,6 +139,8 @@ class IncidentRepository:
                 reasoning_process=incident_model.report.reasoning_process or [],
                 indicators_of_compromise=IOCCollection(**incident_model.report.indicators_of_compromise)
                     if incident_model.report.indicators_of_compromise else None,
+                detection_gaps=[DetectionGap(**g) for g in (incident_model.report.detection_gaps or [])],
+                lessons_learned=incident_model.report.lessons_learned or [],
             ) if incident_model.report else None,
             response_plan=ResponsePlan(
                 incident_id=incident_model.id,

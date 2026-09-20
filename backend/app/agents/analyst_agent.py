@@ -10,7 +10,6 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from app.models.agent_state import AgentState
 from app.models.incident import IncidentReport, IOCCollection, IOCEntry
 from app.tools.similarity_search import search_similar_incidents
-from app.tools.ip_lookup import lookup_ip
 
 logger = get_logger(__name__)
 
@@ -33,14 +32,14 @@ Return ONLY valid JSON with this exact schema:
   "reasoning_process": ["step-by-step reasoning that led to the above conclusions"],
   "detection_gaps": ["missing telemetry or logging that limited this investigation"],
   "lessons_learned": ["security controls that failed or were absent, process improvements needed"],
-  "indicators_of_compromise": [{"value": "<a real IP/domain/hash/URL/email address from the alerts or IP reputation above - never invent one>", "type": "ip|domain|url|hash|email", "confidence": "low|medium|high", "recommended_action": "block|monitor|investigate"}]
+  "indicators_of_compromise": [{"value": "<a real IP/domain/hash/URL/email address from the alerts above - never invent one>", "type": "ip|domain|url|hash|email", "confidence": "low|medium|high", "recommended_action": "block|monitor|investigate"}]
 }
 
 confidence_score MUST be a number between 0.0 and 1.0.
 Be concise and actionable. Prioritize findings by business impact.
-For indicators_of_compromise, only list values that actually appear in the ALERTS or IP
-REPUTATION sections above - if none are worth flagging beyond what's already obvious from
-the alert source IPs, return an empty list rather than guessing.
+For indicators_of_compromise, only list values that actually appear in the ALERTS
+section above - if none are worth flagging beyond what's already obvious from the alert
+source IPs, return an empty list rather than guessing.
 Use tools first if you need more context, then answer with the JSON object only - no markdown, no prose outside the JSON."""
 
 
@@ -56,8 +55,8 @@ async def analyst_agent(state: AgentState) -> AgentState:
         state["incident_report"] = None
         return state
 
-    tools_by_name = {"search_similar_incidents": search_similar_incidents, "lookup_ip": lookup_ip}
-    llm = get_llm(temperature=0.2).bind_tools([search_similar_incidents, lookup_ip])
+    tools_by_name = {"search_similar_incidents": search_similar_incidents}
+    llm = get_llm(temperature=0.2).bind_tools([search_similar_incidents])
 
     # Prepare analysis context
     alerts_summary = "\n".join([
@@ -67,23 +66,6 @@ async def analyst_agent(state: AgentState) -> AgentState:
     
     threat_intel_summary = f"MITRE Techniques: {len(threat_intel.get('mitre_techniques', []))} identified"
     
-    # Check IPs for reputation
-    source_ips = set()
-    for alert in alerts:
-        for log_idx in alert.related_logs[:5]:  # Check first few logs
-            try:
-                log = logs[int(log_idx)]
-                source_ips.add(log.source_ip)
-            except (ValueError, IndexError):
-                pass
-    
-    ip_reputations = {}
-    for ip in list(source_ips)[:5]:  # Limit to 5 IPs
-        try:
-            ip_reputations[ip] = lookup_ip(ip)
-        except Exception:
-            pass
-    
     analysis_prompt = f"""Analyze these security alerts and create a comprehensive incident report:
 
 ALERTS:
@@ -91,9 +73,6 @@ ALERTS:
 
 THREAT INTELLIGENCE:
 {threat_intel_summary}
-
-IP REPUTATION:
-{chr(10).join(f"{ip}: {rep[:200]}" for ip, rep in ip_reputations.items())}
 
 {"CRITIQUE FEEDBACK (revise based on this):" + critique_feedback if critique_feedback else ""}
 
@@ -289,8 +268,8 @@ def _extract_known_iocs(alerts: List, logs: List) -> Dict[str, List[IOCEntry]]:
 
 
 def _merge_llm_iocs(buckets: Dict[str, List[IOCEntry]], items: Any) -> None:
-    """Merge the LLM's own identified IOCs (which may add judgment - e.g. a
-    reputation-flagged IP - that pure log extraction can't) into the deterministic
+    """Merge the LLM's own identified IOCs (which may add judgment that
+    pure log extraction can't) into the deterministic
     buckets above, skipping anything malformed or already present rather than
     failing the whole report over one bad entry."""
     if not isinstance(items, list):

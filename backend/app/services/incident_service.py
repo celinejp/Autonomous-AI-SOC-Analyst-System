@@ -120,6 +120,8 @@ class IncidentService:
         if incident_report:
             iocs = _report_attr(incident_report, "indicators_of_compromise")
             iocs_json = iocs.dict() if hasattr(iocs, "dict") else iocs
+            gaps = _report_attr(incident_report, "detection_gaps") or []
+            gaps_json = [g.dict() if hasattr(g, "dict") else g for g in gaps]
             report_model = IncidentReportModel(
                 incident_id=incident_id,
                 executive_summary=_report_attr(incident_report, "executive_summary") or "",
@@ -131,6 +133,8 @@ class IncidentService:
                 confidence_score=float(_report_attr(incident_report, "confidence_score") or 0),
                 reasoning_process=_report_attr(incident_report, "reasoning_process") or "",
                 indicators_of_compromise=iocs_json,
+                detection_gaps=gaps_json,
+                lessons_learned=_report_attr(incident_report, "lessons_learned") or [],
             )
             session.add(report_model)
 

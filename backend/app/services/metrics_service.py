@@ -16,14 +16,11 @@ class SOCMetrics(BaseModel):
     """SOC KPI metrics model."""
 
     # Time-based metrics
-    mttd_seconds: float = Field(description="Mean Time to Detect")
-    mttr_seconds: float = Field(description="Mean Time to Respond")
-    mttc_seconds: float = Field(description="Mean Time to Contain")
+    mttd_seconds: float = Field(default=0.0, description="Mean Time to Detect")
 
     # Quality metrics
-    false_positive_rate: float = Field(ge=0.0, le=1.0)
-    true_positive_rate: float = Field(ge=0.0, le=1.0)
-    escalation_accuracy: float = Field(ge=0.0, le=1.0, description="% of escalations confirmed valid")
+    false_positive_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    true_positive_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
     # Volume metrics
     alerts_received: int = 0
@@ -31,10 +28,7 @@ class SOCMetrics(BaseModel):
     alerts_escalated: int = 0
     incidents_created: int = 0
 
-    # AI-specific metrics
-    ai_triage_rate: float = Field(ge=0.0, le=1.0, description="% of alerts triaged by AI")
-    ai_accuracy: float = Field(ge=0.0, le=1.0, description="% of AI decisions confirmed correct")
-    alert_reduction_ratio: float = Field(description="Raw alerts to curated incidents")
+    alert_reduction_ratio: float = Field(default=0.0, description="Alerts per incident")
 
     # Coverage metrics
     attack_technique_coverage: Dict[str, bool] = Field(
@@ -58,10 +52,9 @@ class MetricsService:
         """
         Calculate SOC KPIs for the given time period.
         
-        MTTD: Time from first suspicious event to alert generation
-        MTTR: Time from alert to containment recommendation
-        False positive rate: Alerts marked as FP / total alerts
-        Alert reduction: Raw log events / curated incidents
+        MTTD: Time from the first alert's timestamp to incident creation
+        False positive rate: Incidents marked FALSE_POSITIVE / total incidents
+        Alert reduction: Alerts / incidents
         """
         try:
             # Get incidents in period
@@ -81,16 +74,6 @@ class MetricsService:
             # Time from first suspicious log to alert generation
             mttd_total = 0.0
             mttd_count = 0
-
-            # Calculate MTTR (Mean Time to Respond)
-            # Time from alert creation to first response action
-            mttr_total = 0.0
-            mttr_count = 0
-
-            # Calculate MTTC (Mean Time to Contain)
-            # Time from incident creation to containment
-            mttc_total = 0.0
-            mttc_count = 0
 
             # Count false positives
             false_positive_count = 0
@@ -131,8 +114,6 @@ class MetricsService:
 
             # Calculate averages
             mttd_avg = mttd_total / mttd_count if mttd_count > 0 else 0.0
-            mttr_avg = mttr_total / mttr_count if mttr_count > 0 else 0.0
-            mttc_avg = mttc_total / mttc_count if mttc_count > 0 else 0.0
 
             # Calculate rates
             total_incidents = false_positive_count + true_positive_count
@@ -143,23 +124,6 @@ class MetricsService:
                 true_positive_count / total_incidents if total_incidents > 0 else 0.0
             )
 
-            # Escalation accuracy (simplified - assume escalated incidents are valid)
-            escalation_accuracy = 0.9 if escalated_count > 0 else 0.0
-
-            # AI metrics (simplified - assume all incidents go through AI)
-            ai_triage_rate = 1.0 if incidents_count > 0 else 0.0
-            # NOT an independently measured accuracy score: true_positive_rate is the
-            # fraction of incidents NOT marked IncidentStatus.FALSE_POSITIVE, and nothing
-            # in the UI currently offers a way to mark one - so this is structurally
-            # always 1.0 until that review workflow exists, regardless of whether the
-            # AI's detections were actually correct. The frontend labels/caveats this
-            # honestly (see SOCMetricsDashboard.tsx) rather than showing "AI Accuracy".
-            # For an independently measured number, see the eval scripts in
-            # backend/scripts/eval_detection_metrics.py and README.md.
-            ai_accuracy = true_positive_rate
-
-            # Alert reduction (simplified - assume 10:1 ratio for now)
-            # In production, would count raw log entries vs incidents
             alert_reduction_ratio = alerts_count / incidents_count if incidents_count > 0 else 0.0
 
             # Get attack technique coverage
@@ -167,19 +131,14 @@ class MetricsService:
 
             return SOCMetrics(
                 mttd_seconds=mttd_avg,
-                mttr_seconds=mttr_avg,
-                mttc_seconds=mttc_avg,
                 false_positive_rate=false_positive_rate,
                 true_positive_rate=true_positive_rate,
-                escalation_accuracy=escalation_accuracy,
                 alerts_received=alerts_count,
                 alerts_closed=incidents_count - len(
                     [i for i in incidents_list if i.status != IncidentStatus.RESOLVED]
                 ),
                 alerts_escalated=escalated_count,
                 incidents_created=incidents_count,
-                ai_triage_rate=ai_triage_rate,
-                ai_accuracy=ai_accuracy,
                 alert_reduction_ratio=alert_reduction_ratio,
                 attack_technique_coverage=attack_coverage,
                 period_start=start_time,

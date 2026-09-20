@@ -57,7 +57,6 @@ test_endpoint "List Incidents" "GET" "/incidents?limit=10"
 test_endpoint "Dashboard Stats" "GET" "/dashboard/stats"
 test_endpoint "Attack Coverage" "GET" "/metrics/attack-coverage"
 test_endpoint "SOC KPIs" "GET" "/metrics/soc-kpis?hours=24"
-test_endpoint "Organization Profile" "GET" "/organization/profile"
 
 echo ""
 echo "3️⃣  Log Ingestion Tests"

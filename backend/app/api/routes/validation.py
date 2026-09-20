@@ -337,32 +337,3 @@ async def list_ground_truth():
             for i in incidents
         ]
     }
-
-
-@router.post("/run-batch")
-async def run_batch_validation(
-    limit: int = Query(default=20, ge=1, le=100),
-):
-    """Run validation on batch of ground truth incidents (for testing)."""
-    gt_data = load_ground_truth()
-    incidents = gt_data.get("incidents", [])[:limit]
-    
-    results = []
-    for gt in incidents:
-        # Simulate validation (in production, would run through workflow)
-        result = {
-            "ground_truth_id": gt["id"],
-            "name": gt["name"],
-            "is_true_positive": gt["is_true_positive"],
-            "expected_severity": gt["severity"],
-            "expected_techniques": gt["mitre_techniques"],
-            "status": "pending",
-        }
-        results.append(result)
-    
-    return {
-        "batch_id": f"batch-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
-        "total": len(results),
-        "results": results,
-    }
-
