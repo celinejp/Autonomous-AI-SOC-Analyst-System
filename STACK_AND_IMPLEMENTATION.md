@@ -1,4 +1,4 @@
-# Stack and what is wired to what
+# Stack
 
 ## Components
 
@@ -32,7 +32,3 @@
 | Insights `/insights` | `/api/metrics/*`, dashboard stats |
 | Health `/health` | `/api/health/basic`, `/api/health/deep` |
 | Debug `/debug` | `/api/debug/*`, `/api/v1/validate/*`, `/api/v1/performance/metrics` |
-
-## Not wired / not built
-
-Login, TLS, live log sources (logs are pasted or uploaded), IOC enrichment, PDF/CSV export, deployment.

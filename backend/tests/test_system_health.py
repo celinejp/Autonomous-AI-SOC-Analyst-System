@@ -1,396 +1,76 @@
-"""Comprehensive system health and integration tests."""
+"""Integration tests: real LLM (Ollama) and, for the real captures, the public dataset cache.
+
+Run with the stack up and Ollama running:  pytest tests/test_system_health.py -m integration
+"""
+
+import json
+import sys
+from pathlib import Path
 
 import pytest
-import json
-import asyncio
-from pathlib import Path
-from typing import List, Dict, Any
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.orchestrator.langgraph_workflow import run_workflow_with_events
+from app.agents.detection_agent import detection_agent  # noqa: E402
+from app.agents.ingest_agent import ingest_agent  # noqa: E402
+from app.orchestrator.langgraph_workflow import run_workflow_with_events  # noqa: E402
 
-
-# Test fixtures
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
-TEST_LOGS_PATH = FIXTURES_DIR / "test_logs.json"
-
-
-def load_test_scenarios() -> List[Dict[str, Any]]:
-    """Load test scenarios from fixtures."""
-    with open(TEST_LOGS_PATH) as f:
-        data = json.load(f)
-    return data.get("scenarios", [])
-
-
-def load_fixture(scenario_name: str) -> Dict[str, Any]:
-    """Load a specific test scenario."""
-    scenarios = load_test_scenarios()
-    return next((s for s in scenarios if s["name"] == scenario_name), None)
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_all_agents_functional():
-    """Verify all 6 agents execute successfully."""
-    scenario = load_fixture("brute_force_attack")
-    assert scenario, "Test scenario not found"
-    
-    agents_seen = set()
-    
-    async for event in run_workflow_with_events(scenario["logs"], "test-all-agents"):
-        if event.get("type") == "agent_start":
-            agents_seen.add(event.get("agent"))
-        elif event.get("type") == "complete":
-            break
-        elif event.get("type") == "error":
-            pytest.fail(f"Workflow error: {event.get('error')}")
-    
-    # Verify all agents executed
-    expected_agents = {"ingest", "detect", "enrich", "analyze", "critique", "plan_response"}
-    assert agents_seen == expected_agents, f"Missing agents: {expected_agents - agents_seen}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_detection_accuracy_brute_force():
-    """Verify detection agent catches brute force attacks."""
-    scenario = load_fixture("brute_force_attack")
-    assert scenario, "Test scenario not found"
-    
-    final_state = None
-    
-    async for event in run_workflow_with_events(scenario["logs"], "test-brute-force"):
-        if event.get("type") == "complete":
-            final_state = event.get("data")
-            break
-        elif event.get("type") == "error":
-            pytest.fail(f"Workflow error: {event.get('error')}")
-    
-    assert final_state, "Workflow did not complete"
-    
-    # Check alerts were generated
-    alerts = final_state.get("alerts", [])
-    assert len(alerts) > 0, "No alerts generated for brute force attack"
-    
-    # Check severity
-    severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
-    max_severity = max(
-        (severity_map.get(a.get("severity", "low"), 1) for a in alerts),
-        default=1
-    )
-    assert max_severity >= 3, f"Expected high severity, got {max_severity}"
-    
-    # Check MITRE techniques
-    # Techniques live on the alerts (the workflow state has no top-level "mitre_techniques" key;
-    # this test used to read that key and always saw an empty list).
-    technique_ids = [t for a in alerts for t in (a.get("mitre_techniques") or [])]
-    assert any("T1110" in tid or "T1078" in tid for tid in technique_ids), \
-        f"Expected T1110 or T1078, got {technique_ids}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_detection_accuracy_sql_injection():
-    """Verify detection agent catches SQL injection attempts."""
-    scenario = load_fixture("sql_injection_attempt")
-    assert scenario, "Test scenario not found"
-    
-    final_state = None
-    
-    async for event in run_workflow_with_events(scenario["logs"], "test-sql-injection"):
-        if event.get("type") == "complete":
-            final_state = event.get("data")
-            break
-    
-    assert final_state, "Workflow did not complete"
-    
-    alerts = final_state.get("alerts", [])
-    assert len(alerts) > 0, "No alerts generated for SQL injection"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_detection_accuracy_ddos():
-    """Verify detection agent catches DDoS patterns."""
-    scenario = load_fixture("ddos_pattern")
-    assert scenario, "Test scenario not found"
-    
-    final_state = None
-    
-    async for event in run_workflow_with_events(scenario["logs"], "test-ddos"):
-        if event.get("type") == "complete":
-            final_state = event.get("data")
-            break
-    
-    assert final_state, "Workflow did not complete"
-    
-    alerts = final_state.get("alerts", [])
-    assert len(alerts) > 0, "No alerts generated for DDoS pattern"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_false_positive_rate():
-    """Verify benign logs don't trigger false alerts."""
-    scenario = load_fixture("normal_traffic")
-    assert scenario, "Test scenario not found"
-    
-    final_state = None
-    
-    async for event in run_workflow_with_events(scenario["logs"], "test-normal"):
-        if event.get("type") == "complete":
-            final_state = event.get("data")
-            break
-    
-    assert final_state, "Workflow did not complete"
-    
-    # Benign traffic should have low or no alerts
-    alerts = final_state.get("alerts", [])
-    
-    # If alerts exist, they should be low severity
-    if alerts:
-        severity_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
-        max_severity = max(
-            (severity_map.get(a.get("severity", "low"), 1) for a in alerts),
-            default=1
-        )
-        assert max_severity <= 2, f"Expected low/medium severity for benign traffic, got {max_severity}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_workflow_completes_successfully():
-    """Verify workflow completes without errors."""
-    scenario = load_fixture("brute_force_attack")
-    
-    completed = False
-    error_occurred = False
-    
-    async for event in run_workflow_with_events(scenario["logs"], "test-complete"):
-        if event.get("type") == "complete":
-            completed = True
-            break
-        elif event.get("type") == "error":
-            error_occurred = True
-            pytest.fail(f"Workflow error: {event.get('error')}")
-    
-    assert completed, "Workflow did not complete"
-    assert not error_occurred, "Workflow encountered an error"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_ingest_agent_parses_logs():
-    """Verify ingest agent correctly parses log entries."""
-    logs = [
-        "2024-01-15 10:30:00 AUTH FAILED user=admin src=192.168.1.100",
-        "2024-01-15 10:30:01 HTTP REQUEST src=10.0.0.1 dst=example.com",
-    ]
-    
-    from app.agents.ingest_agent import ingest_agent
-    from app.models.agent_state import AgentState
-    
-    state: AgentState = {
-        "logs": [],
-        "raw_logs": logs,
-        "alerts": [],
-        "threat_intel": {},
-        "incident_report": None,
-        "response_plan": None,
-        "confidence": 0.0,
-        "iteration": 0,
-        "needs_revision": False,
-        "critique_feedback": None,
-        "messages": [],
-        "agent_execution_log": [],
-        "incident_id": "test-ingest",
-    }
-    
-    result = await ingest_agent(state)
-    
-    assert "logs" in result
-    assert len(result["logs"]) > 0, "Ingest agent did not parse logs"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_detection_agent_generates_alerts():
-    """Verify detection agent generates alerts from parsed logs."""
-    from app.agents.detection_agent import detection_agent
-    from app.models.agent_state import AgentState
-    from app.models.log_entry import LogEntry
-    from datetime import datetime
-    
-    # A burst of failed logins (a single failed login is deliberately NOT reported as brute force).
-    logs = [
-        LogEntry(
-            timestamp=datetime.now(),
-            source_ip="192.168.1.100",
-            destination_ip="10.0.0.50",
-            action="login_failed",
-            status="failure",
-            auth_result="failure",
-            log_source="auth",
-            raw_log="AUTH FAILED user=admin",
-        )
-        for _ in range(4)
-    ]
-    
-    state: AgentState = {
-        "logs": logs,
-        "raw_logs": [],
-        "alerts": [],
-        "threat_intel": {},
-        "incident_report": None,
-        "response_plan": None,
-        "confidence": 0.0,
-        "iteration": 0,
-        "needs_revision": False,
-        "critique_feedback": None,
-        "messages": [],
-        "agent_execution_log": [],
-        "incident_id": "test-detect",
-    }
-    
-    result = await detection_agent(state)
-    
-    assert "alerts" in result
-    assert len(result["alerts"]) > 0, "Detection agent did not generate alerts"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-@pytest.mark.timeout(1500)  # 5 scenarios x ~2-3 min each on a local llama3.1
-async def test_all_scenarios_complete():
-    """Run all test scenarios and verify they complete."""
-    scenarios = load_test_scenarios()
-    
-    results = []
-    for scenario in scenarios:
-        try:
-            completed = False
-            async for event in run_workflow_with_events(
-                scenario["logs"], 
-                f"test-{scenario['name']}"
-            ):
-                if event.get("type") == "complete":
-                    completed = True
-                    break
-                elif event.get("type") == "error":
-                    results.append({
-                        "scenario": scenario["name"],
-                        "status": "fail",
-                        "error": event.get("error")
-                    })
-                    break
-            
-            if completed:
-                results.append({
-                    "scenario": scenario["name"],
-                    "status": "pass"
-                })
-        except Exception as e:
-            results.append({
-                "scenario": scenario["name"],
-                "status": "fail",
-                "error": str(e)
-            })
-    
-    # Verify all scenarios passed
-    failed = [r for r in results if r["status"] == "fail"]
-    if failed:
-        pytest.fail(f"Scenarios failed: {failed}")
-    
-    assert len(results) == len(scenarios), "Not all scenarios were tested"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_workflow_timeout_handling():
-    """Verify workflow handles timeouts gracefully."""
-    # Use very large log set that might timeout
-    large_logs = [f"2024-01-15 10:00:{i:02d} LOG ENTRY {i}" for i in range(100)]
-    
-    try:
-        # asyncio.wait_for cannot wrap an async generator; asyncio.timeout bounds the whole loop.
-        async with asyncio.timeout(90):
-            async for event in run_workflow_with_events(large_logs, "test-timeout"):
-                if event.get("type") == "error":
-                    # Errors are acceptable for timeout tests
-                    break
-                elif event.get("type") == "complete":
-                    break
-    except TimeoutError:
-        # Timeout is expected for this test
-        pass
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_incident_report_generation():
-    """Verify analyst agent generates incident reports."""
-    scenario = load_fixture("brute_force_attack")
-    
-    final_state = None
-    async for event in run_workflow_with_events(scenario["logs"], "test-report"):
-        if event.get("type") == "complete":
-            final_state = event.get("data")
-            break
-    
-    assert final_state, "Workflow did not complete"
-    
-    # Check that incident report exists
-    report = final_state.get("incident_report")
-    assert report is not None, "Incident report was not generated"
-    
-    # Check required fields
-    if isinstance(report, dict):
-        assert "executive_summary" in report or report.get("executive_summary")
-        assert "technical_findings" in report or report.get("technical_findings")
-        assert "root_cause" in report or report.get("root_cause")
-    else:
-        # Pydantic model
-        assert hasattr(report, "executive_summary")
-        assert hasattr(report, "technical_findings")
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_response_plan_generation():
-    """Verify response planner generates actionable plans."""
-    scenario = load_fixture("brute_force_attack")
-    
-    final_state = None
-    async for event in run_workflow_with_events(scenario["logs"], "test-plan"):
-        if event.get("type") == "complete":
-            final_state = event.get("data")
-            break
-    
-    assert final_state, "Workflow did not complete"
-    
-    plan = final_state.get("response_plan")
-    assert plan is not None, "Response plan was not generated"
-    
-    # Check that plan has actions
-    if isinstance(plan, dict):
-        has_actions = (
-            len(plan.get("containment_actions", [])) > 0 or
-            len(plan.get("investigation_steps", [])) > 0 or
-            len(plan.get("remediation_actions", [])) > 0
-        )
-        assert has_actions, "Response plan has no actionable items"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short", "-m", "integration"])
-
-
-
-# ---- Real attack captures (public Splunk attack_data) through the full workflow -----------------
-# Needs the data cache: run `python scripts/eval_public_datasets.py --splunk-only` once.
+FIXTURES = json.load(open(Path(__file__).parent / "fixtures" / "test_logs.json"))["scenarios"]
+SCENARIOS = {s["name"]: s for s in FIXTURES}
 PUBLIC = Path(__file__).parent.parent / "data" / "public" / "splunk" / "datasets" / "attack_techniques"
+
+pytestmark = pytest.mark.integration
+
+ALL_AGENTS = {"ingest", "detect", "enrich", "analyze", "critique", "plan_response"}
+
+
+async def run_full_workflow(raw_logs, incident_id):
+    """Run the whole graph; returns (final_state, agents_that_started)."""
+    final_state, started = None, set()
+    async for event in run_workflow_with_events(raw_logs, incident_id):
+        if event["type"] == "agent_start":
+            started.add(event["agent"])
+        elif event["type"] == "complete":
+            final_state = event["data"]
+        elif event["type"] == "error":
+            pytest.fail(f"workflow error: {event.get('error')}")
+    assert final_state, "workflow did not complete"
+    return final_state, started
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(900)
+async def test_full_workflow_on_a_brute_force_scenario():
+    """All six agents run and produce alerts, a report with IOCs and a response plan grouped by team."""
+    state, started = await run_full_workflow(SCENARIOS["brute_force_attack"]["logs"], "it-brute-force")
+
+    assert started == ALL_AGENTS
+    alerts = state["alerts"]
+    assert alerts and any(a["severity"] in ("high", "critical") for a in alerts)
+    assert any(t.startswith("T1110") for a in alerts for t in a.get("mitre_techniques", []))
+
+    report = state["incident_report"]
+    assert report["executive_summary"] and report["root_cause"]
+    ips = [i["value"] for i in (report.get("indicators_of_compromise") or {}).get("ip_addresses", [])]
+    assert ips, "expected the attacking IP as an IOC"
+
+    plan = state["response_plan"]
+    assert plan["actions_by_team"], "response plan is not grouped by team"
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("scenario,expect_alert", [
+    ("brute_force_attack", True), ("sql_injection_attempt", True), ("ddos_pattern", True),
+    ("lateral_movement", True), ("normal_traffic", False),
+])
+async def test_detection_on_scenarios(scenario, expect_alert):
+    """Detection (LLM + rules) flags each attack scenario and stays quiet on normal traffic."""
+    state = {"raw_logs": SCENARIOS[scenario]["logs"], "logs": [], "alerts": [], "agent_execution_log": []}
+    state = await detection_agent(await ingest_agent(state))
+    assert bool(state["alerts"]) == expect_alert, [a.title for a in state["alerts"]]
+
+
 REAL_CAPTURES = [
     ("T1070.001", "windows_event_log_cleared/windows-security.log"),
     ("T1543.003", "atomic_red_team/remcom_windows-system.log"),
@@ -399,28 +79,81 @@ REAL_CAPTURES = [
 
 
 @pytest.mark.asyncio
-@pytest.mark.integration
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize("technique,relative", REAL_CAPTURES)
 async def test_real_public_capture_end_to_end(technique, relative):
-    """A real attack capture goes through all six agents: it must raise an alert for that technique
-    and produce a report and a response plan."""
+    """A real attack capture (Splunk attack_data) goes through all six agents and is detected.
+    Needs the cache: run `python scripts/eval_public_datasets.py --splunk-only` once."""
     from scripts.eval_public_datasets import split_events
 
     path = PUBLIC / technique / relative
     if not path.exists():
         pytest.skip("public dataset cache missing (run scripts/eval_public_datasets.py --splunk-only)")
-    events = split_events(path.read_text(errors="ignore"))[:300]
 
-    final_state = None
-    async for event in run_workflow_with_events(events, f"real-{technique}"):
-        if event.get("type") == "complete":
-            final_state = event.get("data")
-        elif event.get("type") == "error":
-            pytest.fail(f"Workflow error: {event.get('error')}")
+    state, _ = await run_full_workflow(split_events(path.read_text(errors="ignore"))[:300], f"it-real-{technique}")
 
-    assert final_state, "workflow did not complete"
-    techniques = {t for a in final_state["alerts"] for t in (a.get("mitre_techniques") or [])}
+    techniques = {t for a in state["alerts"] for t in a.get("mitre_techniques", [])}
     assert any(t.split(".")[0] == technique.split(".")[0] for t in techniques), f"{technique} not detected: {techniques}"
-    assert final_state.get("incident_report"), "no incident report"
-    assert final_state.get("response_plan"), "no response plan"
+    assert state["incident_report"] and state["response_plan"]
+
+
+# ---- The real stack: API -> Redis queue -> worker -> LangGraph + Ollama -> Postgres/pgvector -----------
+API = "http://localhost:8000/api"
+
+
+def _api_up() -> bool:
+    import httpx
+    try:
+        return httpx.get(f"{API}/health/basic", timeout=5).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+@pytest.mark.timeout(900)
+def test_full_stack_submit_analyze_save_and_search():
+    """Submit logs to the running API and follow the incident through the real queue, worker, LLM and
+    databases: it is saved with alerts, a report with IOCs and a response plan, its embedding is stored
+    (pgvector) and semantic search finds it. Needs `docker compose up` and Ollama."""
+    import time
+
+    import httpx
+
+    if not _api_up():
+        pytest.skip("backend API is not running on localhost:8000")
+
+    logs = [f"Jan 15 10:30:0{i} host sshd[1]: Failed password for root from 203.0.113.9 port 22" for i in range(6)]
+    client = httpx.Client(base_url=API, timeout=30)
+    submitted = client.post("/ingest/analyze", json=logs)
+    assert submitted.status_code == 200 and submitted.json()["status"] == "queued"
+    incident_id = submitted.json()["incident_id"]
+
+    try:
+        deadline = time.time() + 600
+        status = {}
+        while time.time() < deadline:
+            status = client.get(f"/incidents/{incident_id}/status").json()
+            if status["status"] in ("completed", "failed"):
+                break
+            time.sleep(5)
+        assert status["status"] == "completed", status
+
+        incident = client.get(f"/incidents/{incident_id}").json()
+        assert incident["severity"].lower() in ("high", "critical")
+        assert any(t.startswith("T1110") for a in incident["alerts"] for t in a["mitre_techniques"])
+        report = incident["report"]
+        assert report["executive_summary"] and report["root_cause"]
+        assert "203.0.113.9" in [i["value"] for i in report["indicators_of_compromise"]["ip_addresses"]]
+        assert incident["response_plan"]["actions_by_team"]
+
+        found = []
+        deadline = time.time() + 180  # the embedding job runs after the save
+        while time.time() < deadline and incident_id not in found:
+            time.sleep(5)
+            try:  # the first embedding after an LLM run waits for Ollama to swap models
+                hits = client.post("/v1/incidents/search/semantic", json={"query": "ssh brute force failed logins", "limit": 20}, timeout=120).json()
+            except httpx.ReadTimeout:
+                continue
+            found = [r["id"] for r in hits["results"]]
+        assert incident_id in found, "incident embedding was not stored / searchable"
+    finally:
+        client.delete(f"/incidents/{incident_id}")

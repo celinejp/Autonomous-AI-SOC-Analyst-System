@@ -43,21 +43,13 @@ purpose-built rule.
 
 A prompt-injection check also runs; instruction-like text inside a log becomes its own alert.
 
-## Tested on real attack data
+## Testing
 
-Each rule is tested by a unit-test sample (`tests/test_attack_rules.py`) **and** against public attack captures
-(Splunk attack_data, EVTX-ATTACK-SAMPLES) with `backend/scripts/eval_public_datasets.py`. The real data exposed
-gaps that the hand-written samples hid (real Windows event XML and multi-line event blocks weren't parsed; several
-rules were too narrow). Six earlier rules that the public data could not exercise (port scan, beaconing, DNS
-tunnelling, ransomware, phishing links, cloud upload) were replaced with techniques the data does contain
-(rundll32, mshta, ingress tool transfer, service creation, SAM dumping, WMI); ransomware, port scans, C2 and
-DNS tunnelling are still caught by the keyword signatures and the LLM. Results are in the README.
-
-A false-positive test on generated benign Windows activity (`backend/scripts/eval_false_positives.py`) found five
-rules too eager on legitimate use of the same tools (`curl` to an internal API, any `net user`, any service install,
-any Run key, and a prompt-injection check that matched the `<System>` tag of every event). They now require
-stronger evidence (a download to disk, several discovery commands together, a suspicious service binary or Run-key
-value); false alarms fell from every benign batch to 1%, and the real captures still fire, also when buried in noise.
+Each rule has a unit-test sample (`backend/tests/test_attack_rules.py`) and is run against real public attack
+captures (Splunk attack_data, EVTX-ATTACK-SAMPLES) with `backend/scripts/eval_public_datasets.py`; all 24 fire on
+real captures. `backend/scripts/eval_false_positives.py` checks that ordinary activity (e.g. `curl` to an internal
+API, a single `net user`, an updater installing a service) does not alert. Results are in the README.
 
 Limits: thresholds are sized for small batches, reputation and domain-age lookups are not done, and keyword
-signatures are easy to evade.
+signatures are easy to evade. Ransomware, port scans, C2 and DNS tunnelling have no ATT&CK rule and rely on the
+signatures and the LLM.

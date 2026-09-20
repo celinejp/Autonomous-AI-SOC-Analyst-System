@@ -98,21 +98,19 @@ async def process_analysis_job(incident_id: str, raw_logs: List[str]) -> None:
                     )
                 elif event_type == "complete":
                     final_state = event["data"]
-                    await hset_mapping(
-                        status_key,
-                        {
-                            "status": "completed",
-                            "progress_percent": "100",
-                            "completed_at": datetime.utcnow().isoformat(),
-                        },
-                    )
                     break
                 elif event_type == "error":
                     raise RuntimeError(event.get("error", "workflow error"))
 
-            if final_state:
-                await IncidentService.save_incident_from_state(db, final_state)
-                await invalidate_incident_caches()
+            if not final_state:
+                raise RuntimeError("workflow ended without a result")
+            # Save first, then report completion: a client that sees "completed" must find the saved incident.
+            await IncidentService.save_incident_from_state(db, final_state)
+            await invalidate_incident_caches()
+            await hset_mapping(
+                status_key,
+                {"status": "completed", "progress_percent": "100", "completed_at": datetime.utcnow().isoformat()},
+            )
     except Exception as e:
         logger.error("Analysis job failed", incident_id=incident_id, error=str(e))
         await hset_mapping(status_key, {"status": "failed", "error": str(e)}, ttl=3600)

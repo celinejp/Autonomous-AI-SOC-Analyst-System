@@ -5,8 +5,10 @@ from typing import Any, Dict, List
 
 from langchain.tools import tool
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
-from app.database.postgres import AsyncSessionLocal
+from app.core.config import settings
 from app.database.redis_client import cache_get_json, cache_set_json, run_coro_sync
 from app.services.embedding_service import get_embedding
 
@@ -25,17 +27,23 @@ def search_similar_incidents(description: str, limit: int = 5) -> str:
 
     async def _search() -> List[Dict[str, Any]]:
         vec = "[" + ",".join(map(str, await get_embedding(description))) + "]"
-        async with AsyncSessionLocal() as session:
-            rows = (await session.execute(
-                text("""
-                    SELECT id, severity, search_text, 1 - (embedding <=> CAST(:v AS vector)) AS similarity
-                    FROM incidents
-                    WHERE embedding IS NOT NULL
-                    ORDER BY embedding <=> CAST(:v AS vector)
-                    LIMIT :n
-                """),
-                {"v": vec, "n": limit},
-            )).fetchall()
+        # This tool runs in its own event loop (run_coro_sync), so it must not borrow a connection from the
+        # main loop's pool (asyncpg connections are bound to the loop that created them): use a private one.
+        engine = create_async_engine(settings.database_url.replace("postgresql://", "postgresql+asyncpg://"), poolclass=NullPool)
+        try:
+            async with AsyncSession(engine) as session:
+                rows = (await session.execute(
+                    text("""
+                        SELECT id, severity, search_text, 1 - (embedding <=> CAST(:v AS vector)) AS similarity
+                        FROM incidents
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <=> CAST(:v AS vector)
+                        LIMIT :n
+                    """),
+                    {"v": vec, "n": limit},
+                )).fetchall()
+        finally:
+            await engine.dispose()
         results = [
             {
                 "incident_id": str(r.id),
