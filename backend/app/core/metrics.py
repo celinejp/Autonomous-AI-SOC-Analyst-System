@@ -28,29 +28,6 @@ class IncidentMetrics(BaseModel):
     extra_techniques: List[str] = Field(default_factory=list)
 
 
-class AggregateMetrics(BaseModel):
-    """Aggregated system-wide metrics."""
-    
-    period_start: datetime
-    period_end: datetime
-    total_incidents: int
-    
-    # Averages
-    avg_accuracy: float
-    avg_precision: float
-    avg_recall: float
-    avg_f1_score: float
-    avg_confidence: float
-    
-    # Rates
-    true_positive_rate: float
-    false_positive_rate: float
-    false_negative_rate: float
-    
-    # By agent
-    agent_performance: Dict[str, float] = Field(default_factory=dict)
-
-
 # Required fields for completeness check
 REQUIRED_INCIDENT_FIELDS = [
     "alerts",

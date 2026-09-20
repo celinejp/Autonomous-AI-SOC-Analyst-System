@@ -54,8 +54,9 @@ or upload/paste logs.
 
 ```bash
 cd backend
-pytest -m "not integration"      # 175 unit tests, ~3 s, no services (CI runs these)
-pytest -m integration            # 10 tests, full stack + Ollama
+pytest -m "not integration and not db"   # 177 unit tests, ~4 s, no services (CI runs these)
+pytest -m db                             # 6 tests, real Postgres + pgvector (CI runs these)
+pytest -m integration                    # 10 tests, full stack + Ollama
 python scripts/eval_public_datasets.py [--llm]      # real public attack data
 python scripts/eval_false_positives.py [--mixed]    # generated benign noise
 ```

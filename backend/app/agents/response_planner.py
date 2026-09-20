@@ -7,7 +7,7 @@ from app.core.llm_factory import ainvoke_llm, get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.agent_state import AgentState
-from app.models.incident import ResponsePlan, ResponseAction, Severity
+from app.models.incident import ResponsePlan, ResponseAction, Severity, highest_severity
 
 SYSTEM_PROMPT = """You are a cybersecurity response planner. Create actionable response plans.
 
@@ -259,7 +259,7 @@ def _fallback_plan(alerts: List) -> ResponsePlan:
                 except ValueError:
                     sev = Severity.LOW
             severities.append(sev)
-        max_severity = max(severities) if severities else Severity.LOW
+        max_severity = highest_severity(severities)
 
         if max_severity in (Severity.CRITICAL, Severity.HIGH):
             containment_actions.append(

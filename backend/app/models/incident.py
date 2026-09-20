@@ -17,6 +17,15 @@ class Severity(str, Enum):
     LOW = "low"
 
 
+SEVERITY_RANK = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICAL: 3}
+
+
+def highest_severity(severities) -> "Severity":
+    """The most severe of several severities (LOW if empty). Severity is a string enum, so plain
+    max() would compare the words alphabetically and enum order lists CRITICAL first; use the rank."""
+    return max(severities, key=SEVERITY_RANK.__getitem__, default=Severity.LOW)
+
+
 class IncidentStatus(str, Enum):
     """Incident status."""
 

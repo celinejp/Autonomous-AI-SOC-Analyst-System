@@ -26,7 +26,7 @@ fi
 
 # Start backend services (PostgreSQL, Redis, Qdrant, Backend API)
 echo "📦 Starting backend services (PostgreSQL, Redis, Qdrant, Backend)..."
-docker-compose up -d postgres redis qdrant backend
+docker-compose up -d postgres redis qdrant backend worker
 
 # Wait for services to be healthy
 echo ""

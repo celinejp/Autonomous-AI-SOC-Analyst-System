@@ -4,8 +4,9 @@
 
 ```bash
 cd backend
-pytest -m "not integration"      # 175 unit tests, ~3 s, no services or LLM (CI runs these)
-pytest -m integration            # 10 tests, full stack + Ollama, ~17 min
+pytest -m "not integration and not db"   # 177 unit tests, ~4 s, no services or LLM (CI runs these)
+pytest -m db                             # 6 tests, real Postgres + pgvector (CI runs these)
+pytest -m integration                    # 10 tests, full stack + Ollama, ~17 min
 ```
 
 | File | Covers |
@@ -17,7 +18,10 @@ pytest -m integration            # 10 tests, full stack + Ollama, ~17 min
 | `test_agent_parsing.py`, `test_threat_intel.py`, `test_ioc_extraction.py`, `test_alert_filtering.py`, `test_log_summary.py` | Critic/Planner/Analyst parsing, technique grounding, IOC rules, alert filtering, LLM prompt summaries |
 | `test_prompt_injection.py`, `test_input_limits.py` | Prompt-injection defences, upload limits |
 | `test_api.py`, `test_job_queue.py`, `test_worker.py`, `test_embedding_service.py`, `test_llm_factory.py` | HTTP API and Demo Mode stream, Redis queue, worker, embeddings, provider selection (Redis, DB and workflow faked) |
+| `test_database.py` (`db`) | Real Postgres + pgvector (`TEST_DATABASE_URL`, default database `soc_test` on port 5433; its schema is dropped and recreated): fresh-database bootstrap, save/read-back, placeholder update, list filters, delete cascade, cosine ranking |
 | `test_system_health.py` (integration) | Real services: full workflow on a brute-force scenario, detection on the five fixture scenarios, three real public captures through all six agents, and a full-stack run (API -> Redis queue -> worker -> LLM -> Postgres/pgvector -> semantic search) |
+
+CI (`.github/workflows/ci.yml`) runs three jobs: frontend build, unit tests, and the `db` tests against a pgvector service container. Integration tests and LLM evals need Ollama and the stack, so they run locally.
 
 The real-capture tests skip if the data cache is missing; the full-stack test skips if the backend isn't running.
 

@@ -7,6 +7,7 @@ on:
     branches: ["**"]
 
 jobs:
+  # Type-checks and builds the Next.js app.
   frontend-build:
     runs-on: ubuntu-latest
     defaults:
@@ -22,15 +23,15 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-  backend-tests:
+  # Unit tests: no Docker services, no LLM. Redis, the workflow and the database are faked, so this job
+  # would still pass with every dependency down.
+  backend-unit-tests:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     env:
       DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
-      REDIS_URL: redis://localhost:6379
-      QDRANT_URL: http://localhost:6333
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,7 +40,36 @@ jobs:
           cache: "pip"
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
-      # Excludes tests marked "integration": those need the full Docker stack
-      # (Postgres + Redis + Qdrant + a live LLM provider) and are run manually,
-      # not on every push - see backend/tests/test_system_health.py.
-      - run: python -m pytest -m "not integration"
+      - run: python -m pytest -m "not integration and not db"
+
+  # Persistence tests against a real PostgreSQL with the pgvector extension (no LLM needed).
+  backend-db-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: soc_user
+          POSTGRES_PASSWORD: soc_password
+          POSTGRES_DB: soc_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U soc_user -d soc_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://soc_user:soc_password@localhost:5432/soc_test
+      TEST_DATABASE_URL: postgresql+asyncpg://soc_user:soc_password@localhost:5432/soc_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -m db
+
+  # The `integration` tests need the full Docker stack and Ollama, so they run locally (see docs/TESTING_GUIDE.md).

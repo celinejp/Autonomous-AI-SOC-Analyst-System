@@ -11,7 +11,7 @@ from app.database.models import (
     AlertModel, MITRETechniqueModel, IncidentReportModel,
     ResponsePlanModel, AgentExecutionLogModel
 )
-from app.models.incident import IncidentStatus, Severity
+from app.models.incident import IncidentStatus, Severity, highest_severity
 
 
 class IncidentService:
@@ -37,7 +37,7 @@ class IncidentService:
         max_severity = Severity.LOW
         if alerts:
             severities = [_severity(a) for a in alerts]
-            max_severity = max(severities, key=lambda s: list(Severity).index(s))
+            max_severity = highest_severity(severities)
 
         # Create incident
         incident_data = {

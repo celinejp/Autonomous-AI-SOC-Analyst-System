@@ -15,7 +15,6 @@ logger = get_logger(__name__)
 class SOCMetrics(BaseModel):
     """SOC KPI metrics model."""
 
-    # Time-based metrics
     # Quality metrics
     false_positive_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     true_positive_rate: float = Field(default=0.0, ge=0.0, le=1.0)
